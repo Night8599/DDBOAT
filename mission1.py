@@ -23,7 +23,7 @@ CALIB_FILES = [os.path.join(DATA, "calib", "mag2d.json"),
 
 DEFAULTS = {"speed": 120, "kp": 60.0, "turn_max": 90.0, "direction": "left",
             "hysteresis_deg": 10.0, "turn_timeout_s": 60.0, "hz": 10.0,
-            "manual_reverse": "yes", "filter": 3, "turn_slew": 15.0,
+            "manual_reverse": "yes", "filter": 1, "turn_slew": 0.0,
             "calib": None, "drivers": None, "keys": None}
 
 STOPPED = "PARADO"
@@ -38,8 +38,8 @@ USAGE = (
     "Uso: python3 mission1.py calib | check | run | sim [opcoes]\n"
     "Opcoes: --speed N  --kp X  --turn-max X  --hysteresis-deg X  --turn-timeout-s X  --hz X\n"
     "        --manual-reverse yes|no  --calib ARQUIVO  --drivers PASTA\n"
-    "        --filter N (mediana do rumo em N leituras, N impar, 1 desliga)\n"
-    "        --turn-slew X (variacao maxima da correcao da reta por ciclo, 0 desliga)\n"
+    "        --filter N (mediana do rumo em N leituras, N impar, padrao 1 = desligado)\n"
+    "        --turn-slew X (variacao maxima da correcao da reta por ciclo, padrao 0 = desligado)\n"
     "        --direction left|right (so no check)  --keys ROTEIRO (so no sim)\n"
     "Teclas do run: r reta | t volta (depois h ou a) | v velocidade | q para\n"
     "               m modo manual (w a d s v, m sai) | Ctrl+C sai")
@@ -119,10 +119,10 @@ def passed_start(theta, theta0, direction):
 
 
 def mix(thrust, turn):
-    half = (CMD_MAX - CMD_MIN) / 2.0
-    d = max(-half, min(half, turn))
-    t = max(CMD_MIN + abs(d), min(CMD_MAX - abs(d), thrust))
-    return int(round(t - d)), int(round(t + d))
+    outer = int(round(thrust))
+    diff = min(2.0 * abs(turn), float(thrust))
+    inner = int(round(thrust - diff))
+    return (inner, outer) if turn > 0 else (outer, inner)
 
 
 def raw_angle(mx, my, c):
