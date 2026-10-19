@@ -107,6 +107,13 @@ class PotentialField:
         if degrees:
             angle = math.degrees(angle)
         return angle
+    def convert_gradient_to_esl(self, gradient: np.ndarray) -> float:
+        """
+        Convert the gradient vector to an ESL (East-South-Left) angle in radians.
+        The angle is measured clockwise from the positive x-axis (East).
+        """
+        angle = math.atan2(-gradient[1], gradient[0])  # Invert y for clockwise measurement
+        return angle
 
 if __name__ == "__main__":
     # Example usage
@@ -126,5 +133,7 @@ if __name__ == "__main__":
     print("Total Potential at p:", potential_field.potential(p))
     print("Total Gradient at p:", potential_field.gradient(p))
     gradient = potential_field.gradient(p)
+    esl_angle = potential_field.convert_gradient_to_esl(gradient)
+    print("ESL Angle of Gradient at p (radians):", esl_angle)
     angle = potential_field.convert_gradient_to_angle(gradient, degrees=True)
     print("Angle of Gradient at p (degrees):", angle)
