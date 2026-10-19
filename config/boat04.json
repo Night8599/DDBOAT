@@ -1,0 +1,74 @@
+{
+  "_doc": "Config do barco 04. null = ainda nao definido (a funcao que precisa recusa rodar). Veja config/README.md",
+  "boat": {"number": 4, "ip": "172.20.25.204", "user": "ue32", "remote_dir": "~/DDBOAT"},
+
+  "loop": {"hz": 10, "status_period_s": 0.5},
+
+  "real": {
+    "drivers_dir": "src/DriversDDBOAT_2026",
+    "turn_sign": 1,
+    "motors": {"cmd_max": 191, "allow_reverse": false, "watchdog_s": 1.0},
+    "imu": {"median_n": 5, "median_sleep_s": 0.005, "bdu": false},
+    "gps": {"tty_dev": 0, "filter_speed": "0", "mode": "driver"}
+  },
+
+  "unity": {
+    "ip": "172.20.26.99", "cmd_port": 5005, "pose_port": 5006,
+    "robot_id": 4, "password": " ",
+    "cmd_max": 190, "allow_reverse": true, "turn_sign": 1
+  },
+
+  "pysim": {
+    "params_p1_p7": [0.07, 220, 3e-05, 15e-05, 0.4, 5.0, 5.0],
+    "u_per_cmd": 0.02618,
+    "cmd_max": 191, "allow_reverse": false, "turn_sign": 1,
+    "dt_integration_s": 0.01,
+    "current_xy_mps": [0.0, 0.0],
+    "gps_hz": 1.0, "gps_sigma_m": 1.0,
+    "mag_noise_lsb": 15, "gyro_bias_lsb": 5, "gyro_noise_lsb": 8, "acc_noise_lsb": 20,
+    "mag2d": {"offx": 3400, "offy": -2900, "sx": 0.0012, "sy": 0.0011, "north": 37.0, "sign": -1, "mz": 8600},
+    "origin": [48.19924, -3.0145649],
+    "start_x_y_theta": [0.0, 0.0, 0.0]
+  },
+
+  "nav": {
+    "heading_source": "mag2d",
+    "mag2d_file": "data/calib/mag2d.json",
+    "mag3d_file": "data/calib/mag3d.json",
+    "axes_file": "data/calib/axes.json",
+    "unity_conv_file": "data/calib/unity_conv.json",
+    "tilt_compensation": false,
+    "declination_deg": null,
+    "gyro_fusion": "none",
+    "complementary_gain": 0.05,
+    "heading_kf": {"sigma_theta0_rad": 0.2, "sigma_bias0_rad_s": 0.02, "q_rate": 0.01,
+                   "q_bias": 0.0005, "r_mag_rad": 0.05},
+    "position_filter_kalman": false,
+    "position_kf": {"sigma_pos0_m": 5.0, "sigma_vel0_mps": 1.0, "q_acc": 0.3, "r_gps_m": 2.0,
+                    "reset_after_rejections": 5},
+    "origin_latlon": null
+  },
+
+  "calib": {"gyro_still_max_std_lsb": 30, "mag3d_inclination_deg": 64.0, "mag2d_rotation_s": 20},
+
+  "control": {
+    "heading": {"kp": 60.0, "ki": 0.0, "kd": 0.0, "turn_max": 90.0, "i_max": 1.0, "tau_d_s": 0.0},
+    "mixer": {"gain_left": 1.0, "gain_right": 1.0, "deadzone": 0}
+  },
+
+  "guidance": {
+    "mode": "field", "field_r_m": 10.0, "field_gamma_rad": 1.0, "lookahead_m": 8.0,
+    "pass_margin": 0.0, "slow_radius_m": 0.0, "slow_thrust_min": 60.0
+  },
+
+  "safety": {
+    "home_latlon": null,
+    "geofence_latlon": null,
+    "gps_timeout_s": 3.0,
+    "max_mission_s": null,
+    "rth_radius_m": 5.0,
+    "rth_thrust": 120
+  },
+
+  "telemetry": {"enabled": false, "pc_ip": null, "port": 6000, "period_s": 0.5}
+}

@@ -1,0 +1,8 @@
+{
+  "_doc": "Seguimento de rumo sem GPS: bias do giro parado, oeste 20 s, leste 20 s. Barco real: precisa da calibracao mag2d.",
+  "steps": [
+    {"type": "gyro_bias", "duration_s": 10},
+    {"type": "heading", "compass_deg": 270, "thrust": 120, "duration_s": 20},
+    {"type": "heading", "compass_deg": 90, "thrust": 120, "duration_s": 20}
+  ]
+}

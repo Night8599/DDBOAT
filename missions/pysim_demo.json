@@ -1,0 +1,11 @@
+{
+  "_doc": "Demo para o simulador Python (pontos em metros ENU). python3 main.py run missions/pysim_demo.json --backend pysim",
+  "steps": [
+    {"type": "gyro_bias", "duration_s": 5},
+    {"type": "wait_fix", "timeout_s": 10},
+    {"type": "heading", "compass_deg": 90, "thrust": 120, "duration_s": 15},
+    {"type": "goto", "point": {"x": 40, "y": 30}, "radius_m": 3, "thrust": 150},
+    {"type": "polygon", "points": [{"x": 40, "y": 30}, {"x": 40, "y": -20}, {"x": -10, "y": -20}],
+     "laps": 1, "thrust": 150}
+  ]
+}

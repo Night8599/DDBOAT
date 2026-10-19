@@ -1,0 +1,9 @@
+{
+  "_doc": "MODELO: troque os null pelas coordenadas da boia (graus decimais). O retorno usa safety.home_latlon do config.",
+  "steps": [
+    {"type": "gyro_bias", "duration_s": 10},
+    {"type": "wait_fix", "timeout_s": 120},
+    {"type": "goto", "point": {"lat": null, "lon": null}, "radius_m": 3, "thrust": 150},
+    {"type": "home", "radius_m": 5, "thrust": 150}
+  ]
+}
