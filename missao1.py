@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""missao1.py - DDBoat 04: linha reta + uma volta sobre si mesmo.
+"""missao1.py - DDBoat 04: reta + volta sobre si mesmo, comandadas pelo teclado.
 
 Script AUTONOMO: nao importa o pacote ddboat/ (biblioteca ainda nao validada).
 Usa so a biblioteca padrao do Python (3.5+) e os drivers da ENSTA, com as
@@ -10,33 +10,65 @@ Convencao (a mesma aprovada para a biblioteca):
   theta = 90 graus - rumo_bussola.  cos(theta) = componente leste da proa,
   sin(theta) = componente norte. Bussola (0 = N, horario) so na tela e no log.
 
-Automato da missao:   RETA -> GIRO -> FIM
-  RETA: segura o rumo medido na partida por T segundos (controle P + mixer).
-  GIRO: um so motor (sem re no lago). Sub-automato de 4 estados pelos sinais
-        de (cos theta, sin theta):
-            Q1 = (+,+) proa NE     Q2 = (-,+) proa NO
-            Q3 = (-,-) proa SO     Q4 = (+,-) proa SE
-        Giro a esquerda (anti-horario): Q1 -> Q2 -> Q3 -> Q4 -> Q1
-        Giro a direita  (horario):      Q1 -> Q4 -> Q3 -> Q2 -> Q1
-        Troca de estado so quando a componente que muda de sinal passa de
-        sin(histerese) do outro lado (ruido na fronteira nao troca estado).
-        Transicao no sentido contrario desconta 1 (balanco nao conta volta).
-        Com 4 transicoes liquidas o barco voltou ao quadrante inicial; dai ele
-        gira ate passar pelo rumo inicial e para (volta >= 360 graus).
-  FIM:  motores em 0.
+Teclas do modo run. O programa comeca PARADO (motores em 0), no modo AUTOMATICO.
+AUTOMATICO:
+  r   RETA: SETA o rumo atual (o do instante em que voce aperta) e passa a segura-lo.
+      Se o barco virar para um lado, os motores se diferenciam para corrigir para o
+      outro (controle P + mixer). Apertar r de novo seta o rumo de novo.
+      A tela mostra rumo, alvo, erro (alvo - rumo, bussola: negativo = barco virou
+      para a direita do alvo, positivo = para a esquerda) e o quadrante.
+  t   GIRO: pergunta o sentido, h = horario ou a = anti-horario. Da UMA volta
+      completa e PARA sozinho (estado PARADO) quando o automato detecta a volta.
+      A tela mostra rumo, erro (graus que FALTAM para completar a volta, 360 -> 0)
+      e o quadrante (estado do automato).
+  v   VELOCIDADE: pede um numero de 0 a 191 e Enter (Esc cancela). O mesmo valor
+      vale para o empuxo da reta e para o modulo do comando de cada motor no giro,
+      nos dois sentidos. Vale na hora, em qualquer modo e estado.
+      Na partida do programa ele tambem pergunta a velocidade inicial.
+  q   zera os motores (estado PARADO). O programa continua esperando teclas.
+  m   entra no modo MANUAL (motores param).
+MANUAL (como o teleop da biblioteca; cada tecla fica ligada ate a proxima):
+  w   frente com motores CONSTANTES (v, v), sem correcao de rumo
+  a   gira para a esquerda: (-v, +v)        d   gira para a direita: (+v, -v)
+      (com --giro-re nao: a = (0, v) e d = (v, 0))
+  s   para (0, 0), tambem q. Continua no modo manual.
+  v   velocidade.     m   volta ao modo automatico, PARADO. r e t nao valem no manual.
+  Fora do modo manual w, a, d e s NAO fazem nada (so q para). Dentro da pergunta h/a
+  do t, a significa anti-horario. Ctrl+C sai (zera os motores). Enquanto a pergunta
+  de h/a ou de v esta na tela, a acao atual CONTINUA. Teclas de seta sao ignoradas.
+  Erro e quadrante so aparecem na tela e no log no RETA e no GIRO.
 
-Uso no barco (cd ~/DDBOAT):
+Automato do giro, 4 estados pelos sinais de (cos theta, sin theta):
+    Q1 = (+,+) proa NE     Q2 = (-,+) proa NO
+    Q3 = (-,-) proa SO     Q4 = (+,-) proa SE
+  Giro a esquerda (a, anti-horario): Q1 -> Q2 -> Q3 -> Q4 -> Q1
+  Giro a direita  (h, horario):      Q1 -> Q4 -> Q3 -> Q2 -> Q1
+  Troca de estado so quando a componente que muda de sinal passa de
+  sin(histerese) do outro lado (ruido na fronteira nao troca estado).
+  Transicao no sentido contrario desconta 1 (balanco nao conta volta).
+  Com 4 transicoes liquidas o barco voltou ao quadrante inicial; dai ele
+  gira ate passar pelo rumo inicial do giro e para (volta >= 360 graus).
+  Giro SIMETRICO (padrao, --giro-re sim): um motor para frente e o outro para tras,
+  com o mesmo modulo v. a (anti-horario): esq = -v, dir = +v. h (horario): esq = +v,
+  dir = -v. Usa marcha a re, que a apresentacao de 15/10 diz nao existir no lago:
+  teste na bancada antes. Com --giro-re nao, volta ao giro de UM motor (a: (0,v),
+  h: (v,0)). A reta nunca usa re.
+
+Uso no barco (cd ~/DDBOAT), dentro de ssh ou screen (precisa de terminal):
   python3 missao1.py calib            calibracao 2D (identica ao cap_nord)
   python3 missao1.py check            SEM motor: gire o barco com a mao e veja
                                       quadrante e transicoes do automato
-  python3 missao1.py run [opcoes]     missao com motores
+  python3 missao1.py run [opcoes]     modo teclado, com motores
 No PC (sem barco):
-  python3 missao1.py sim [opcoes]     mesma logica no modelo de 8 estados do Jaulin
+  python3 missao1.py sim [opcoes]     mesma logica no modelo de 8 estados do Jaulin,
+                                      com teclas por roteiro: --teclas "1:r,10:ta,40:q"
+                                      (tempo em s : teclas; <enter> e <esc> existem)
 
-Opcoes: --reta-s 20  --empuxo 120  --kp 60  --giro-max 90  --giro-cmd 120
-        --sentido esq|dir  --hist-deg 10  --giro-timeout-s 60  --hz 10
-        --calib ARQ  --drivers PASTA
-Parar: Ctrl+C, ou por outro SSH: touch data/STOP
+Opcoes: --vel 120 (v inicial)  --kp 60  --giro-max 90  --hist-deg 10
+        --giro-timeout-s 60  --hz 10  --calib ARQ  --drivers PASTA
+        --giro-re sim|nao (giro simetrico com re, padrao sim)
+        --sentido esq|dir (so no check)  --teclas ROTEIRO (so no sim)
+Parar: Ctrl+C, ou por outro SSH: touch data/STOP (e depois rm data/STOP)
 """
 from __future__ import print_function
 
@@ -62,9 +94,9 @@ DRIVER_DIRS = [os.path.join(HERE, "src", "DriversDDBOAT_2026"),
 CALIB_FILES = [os.path.join(DATA, "calib", "mag2d.json"),
                os.path.join(HERE, "calib_cap.json")]
 
-DEFAULTS = {"reta-s": 20.0, "empuxo": 120.0, "kp": 60.0, "giro-max": 90.0,
-            "giro-cmd": 120.0, "sentido": "esq", "hist-deg": 10.0,
-            "giro-timeout-s": 60.0, "hz": 10.0, "calib": None, "drivers": None}
+DEFAULTS = {"vel": 120, "kp": 60.0, "giro-max": 90.0, "sentido": "esq",
+            "hist-deg": 10.0, "giro-timeout-s": 60.0, "hz": 10.0,
+            "giro-re": "sim", "calib": None, "drivers": None, "teclas": None}
 
 
 # ----------------------------------------------------------------- angulos
@@ -367,115 +399,416 @@ def new_log_path(prefix):
 
 
 LOG_COLS = ["t_s", "estado", "quadrante", "transicoes", "rumo_deg", "theta_deg",
-            "cos", "sin", "alvo_rumo_deg", "erro_deg", "giro_acum_deg",
+            "cos", "sin", "alvo_rumo_deg", "erro_deg", "giro_acum_deg", "vel", "tecla",
             "cmd_esq", "cmd_dir", "mag_x", "mag_y", "mag_z"]
 
 
+# ------------------------------------------------------------------ teclas
+ESC = "\x1b"
+DEFAULT_SIM_KEYS = "1:r,10:t,10.2:a,26:r,40:v100<enter>,42:t,42.2:h,58:q"
+
+
+def key_name(ch):
+    """Nome da tecla para o log (sem virgula, que quebraria o CSV)."""
+    if ch.isalnum():
+        return ch
+    return {"\n": "enter", "\r": "enter", ESC: "esc", "\x7f": "bksp",
+            "\x08": "bksp"}.get(ch, "x%02x" % ord(ch))
+
+
+def parse_keys(buf):
+    """Texto lido do teclado -> lista de teclas em minuscula.
+    Sequencias de seta (ESC [ A, ESC O A, ESC [ 1 ; 5 A ...) sao descartadas
+    inteiras, senao a seta para cima viraria a tecla 'a'. ESC sozinho e a tecla ESC."""
+    out = []
+    i = 0
+    n = len(buf)
+    while i < n:
+        ch = buf[i]
+        if ch == ESC:
+            if i + 1 < n and buf[i + 1] in "[O":
+                i += 2
+                while i < n and (buf[i] in "0123456789;"):
+                    i += 1
+                i += 1                  # caractere final da sequencia
+                continue
+            out.append(ESC)
+            i += 1
+            continue
+        out.append(ch.lower())
+        i += 1
+    return out
+
+
+class TtyKeys(object):
+    """Teclado do terminal, sem esperar Enter e sem eco. Ctrl+C continua valendo."""
+
+    def __init__(self):
+        import termios
+        import tty
+        self._termios = termios
+        self.fd = sys.stdin.fileno()
+        try:
+            self.old = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+        except termios.error as e:
+            print("ERRO: o terminal nao aceita leitura de teclas (%s)." % e)
+            sys.exit(1)
+        self.held = ""
+        self.closed = False
+
+    def read(self, now):
+        import select
+        new = ""
+        while select.select([self.fd], [], [], 0)[0]:
+            chunk = os.read(self.fd, 64)
+            if not chunk:
+                break
+            new += chunk.decode("latin-1")
+        data = self.held + new
+        self.held = ""
+        # Sequencia de seta partida entre duas leituras: segura ate a proxima.
+        if new and (data.endswith(ESC) or data.endswith(ESC + "[") or data.endswith(ESC + "O")):
+            cut = data.rfind(ESC)
+            self.held = data[cut:]
+            data = data[:cut]
+        return parse_keys(data)
+
+    def finished(self, now):
+        return False
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self._termios.tcsetattr(self.fd, self._termios.TCSADRAIN, self.old)
+
+
+class ScriptKeys(object):
+    """Teclas por roteiro (modo sim): "tempo:teclas,tempo:teclas". O tempo e o
+    relogio do barco. <enter> e <esc> sao teclas especiais."""
+
+    def __init__(self, text):
+        self.items = []
+        for tok in text.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            t, sep, chars = tok.partition(":")
+            try:
+                tt = float(t)
+            except ValueError:
+                print("ERRO: roteiro invalido em '%s' (use tempo:teclas)" % tok)
+                sys.exit(1)
+            chars = chars.replace("<enter>", "\n").replace("<esc>", ESC)
+            self.items.append((tt, chars))
+        self.items.sort(key=lambda x: x[0])
+        self.last = self.items[-1][0] if self.items else 0.0
+
+    def read(self, now):
+        out = []
+        while self.items and self.items[0][0] <= now:
+            out.extend(parse_keys(self.items.pop(0)[1]))
+        return out
+
+    def finished(self, now):
+        return not self.items and now >= self.last + 1.0
+
+    def close(self):
+        pass
+
+
 # ---------------------------------------------------------------- missao
-def mean_theta(boat, n=10, dt=0.05):
-    sc = ss = 0.0
-    for _ in range(n):
-        th, _, _ = boat.heading()
-        sc += math.cos(th)
-        ss += math.sin(th)
-        boat.sleep(dt)
-    return math.atan2(ss, sc)
+class KeyMission(object):
+    """Dois modos.
+    AUTOMATICO: estados PARADO, RETA, GIRO (teclas r t v q, e m para entrar no manual).
+    MANUAL:     estados MANUAL (parado), FRENTE, VIRA_E, VIRA_D (teclas w a d s v q,
+                e m para voltar ao automatico).
+    Alem disso ha uma pergunta pendente (prompt): None, "sentido" (h/a) ou "vel"
+    (numero). A pergunta NAO interrompe a acao em andamento."""
+
+    def __init__(self, a, verbose=True):
+        self.a = a
+        self.theta_ref = None            # rumo alvo (ENU): so existe depois do primeiro r
+        self.verbose = verbose
+        self.vel = int(a["vel"])
+        self.manual_mode = False
+        self.state = "PARADO"
+        self.prompt = None
+        self.buf = ""
+        self.auto = None
+        self.direction = 0
+        self.theta = 0.0
+        self.theta_start = 0.0
+        self.theta_prev = 0.0
+        self.now = 0.0
+        self.t_giro = 0.0
+        self.acc = 0.0
+        self.events = []
+
+    def say(self, msg):
+        self.events.append((self.now, msg))
+        if self.verbose:
+            print("\n" + msg)
+
+    def update(self, theta, now):
+        self.theta = theta
+        self.now = now
+
+    # ---- erro mostrado (so no RETA e no GIRO)
+    def reta_err_deg(self):
+        """RETA: rumo alvo MENOS rumo atual, em graus de bussola, em [-180, 180).
+        > 0: o barco esta a esquerda do alvo (precisa virar para a direita).
+        < 0: o barco esta a direita do alvo (precisa virar para a esquerda)."""
+        return -math.degrees(wrap_pi(self.theta_ref - self.theta))
+
+    def giro_left_deg(self):
+        """GIRO: graus que faltam para completar a volta (360 -> 0)."""
+        return max(0.0, 360.0 - abs(self.acc))
+
+    def err_info(self):
+        """(alvo_rumo_deg, erro_deg) para a tela e o log; None onde nao se aplica."""
+        if self.state == "RETA" and self.theta_ref is not None:
+            return theta_to_compass(self.theta_ref), self.reta_err_deg()
+        if self.state == "GIRO":
+            return None, self.giro_left_deg()
+        return None, None
+
+    # ---- acoes
+    def halt(self, why):
+        """Para os motores. No manual continua no manual (MANUAL), no automatico PARADO."""
+        self.prompt = None
+        self.state = "MANUAL" if self.manual_mode else "PARADO"
+        self.say(why)
+
+    def spin_cmd(self, direction):
+        """Comando de giro no lugar: +1 = esquerda (anti-horario), -1 = direita."""
+        g = int(self.vel)
+        if self.a["giro-re"] == "sim":
+            return (-g, g) if direction == 1 else (g, -g)
+        return (0, g) if direction == 1 else (g, 0)
+
+    def manual(self, state, what):
+        self.prompt = None
+        self.state = state
+        self.say("%s, v=%d" % (what, self.vel))
+
+    def enter_manual(self):
+        self.prompt = None
+        self.manual_mode = True
+        self.state = "MANUAL"
+        self.say("MODO MANUAL, motores parados: w=frente a=esq d=dir s=para v=vel m=sai")
+
+    def exit_manual(self):
+        self.prompt = None
+        self.manual_mode = False
+        self.state = "PARADO"
+        self.say("MODO AUTOMATICO, PARADO: r=reta t=volta v=vel q=para m=manual")
+
+    def go_reta(self):
+        self.prompt = None
+        self.theta_ref = self.theta      # seta o rumo do instante da tecla
+        self.state = "RETA"
+        self.say("RETA: rumo setado em %.1f graus, v=%d"
+                 % (theta_to_compass(self.theta_ref), self.vel))
+
+    def start_giro(self, direction):
+        self.prompt = None
+        self.direction = direction
+        self.auto = QuadrantAutomaton(self.theta, direction, self.a["hist-deg"])
+        self.theta_start = self.theta
+        self.theta_prev = self.theta
+        self.acc = 0.0
+        self.t_giro = self.now
+        self.state = "GIRO"
+        self.say("GIRO para a %s, v=%d (%s), rumo inicial %.1f, estado %s"
+                 % ("ESQUERDA (anti-horario)" if direction == 1 else "DIREITA (horario)",
+                    self.vel, "motores opostos" if self.a["giro-re"] == "sim" else "um motor",
+                    theta_to_compass(self.theta), QUAD_NAMES[self.auto.q0]))
+        if self.vel == 0:
+            self.say("AVISO: v = 0, o barco nao vai girar")
+
+    # ---- teclas
+    def on_key(self, ch):
+        stop_keys = ("q", "s") if self.manual_mode else ("q",)
+        if self.prompt == "sentido":
+            if ch == "h":
+                self.start_giro(-1)
+            elif ch == "a":
+                self.start_giro(1)
+            elif ch == ESC:
+                self.prompt = None
+                self.say("giro cancelado")
+            elif ch in stop_keys:
+                self.halt("PARADO (tecla %s)" % ch)
+            elif ch == "r":
+                self.go_reta()
+            return
+        if self.prompt == "vel":
+            if len(ch) == 1 and ch in "0123456789":
+                if len(self.buf) < 3:
+                    self.buf += ch
+            elif ch in ("\x7f", "\x08"):
+                self.buf = self.buf[:-1]
+            elif ch in ("\n", "\r"):
+                if self.buf == "":
+                    self.say("v inalterado = %d" % self.vel)
+                elif int(self.buf) <= CMD_MAX:
+                    self.vel = int(self.buf)
+                    self.say("v = %d" % self.vel)
+                else:
+                    self.say("ERRO: v deve ser de 0 a %d, mantido %d" % (CMD_MAX, self.vel))
+                self.prompt = None
+            elif ch == ESC:
+                self.prompt = None
+                self.say("v inalterado = %d" % self.vel)
+            elif ch in stop_keys:
+                self.halt("PARADO (tecla %s)" % ch)
+            return
+        if self.manual_mode:
+            if ch == "w":
+                self.manual("FRENTE", "FRENTE: motores constantes (v,v), sem correcao de rumo")
+            elif ch == "a":
+                self.manual("VIRA_E", "VIRA A ESQUERDA (manual)")
+            elif ch == "d":
+                self.manual("VIRA_D", "VIRA A DIREITA (manual)")
+            elif ch in ("s", "q"):
+                self.halt("MANUAL: motores parados (tecla %s)" % ch)
+            elif ch == "v":
+                self.prompt = "vel"
+                self.buf = ""
+            elif ch == "m":
+                self.exit_manual()
+            elif ch in ("r", "t"):
+                self.say("No modo manual r e t nao funcionam. Saia com m.")
+            return
+        if ch == "r":
+            self.go_reta()
+        elif ch == "t":
+            self.prompt = "sentido"
+        elif ch == "v":
+            self.prompt = "vel"
+            self.buf = ""
+        elif ch == "q":
+            self.halt("PARADO (tecla q)")
+        elif ch == "m":
+            self.enter_manual()
+        elif ch in ("w", "a", "s", "d"):
+            self.say("Tecla %s so vale no modo manual (m). Aqui, q para." % ch)
+
+    # ---- controle (uma vez por volta do laco)
+    def control(self):
+        left = right = 0
+        if self.state == "RETA":
+            if self.vel > 0:
+                err = wrap_pi(self.theta_ref - self.theta)
+                # correcao limitada por giro-max e por v: cada motor fica em [0, 2v]
+                lim = min(self.a["giro-max"], float(self.vel))
+                turn = max(-lim, min(lim, self.a["kp"] * err))
+                left, right = mix(self.vel, turn)
+        elif self.state == "FRENTE":
+            left = right = int(self.vel)
+        elif self.state == "VIRA_E":
+            left, right = self.spin_cmd(1)
+        elif self.state == "VIRA_D":
+            left, right = self.spin_cmd(-1)
+        elif self.state == "GIRO":
+            self.acc += math.degrees(wrap_pi(self.theta - self.theta_prev))
+            self.theta_prev = self.theta
+            if self.auto.update(self.theta) != 0:
+                self.say("  %s  transicoes liquidas = %d  giro acumulado = %.0f"
+                         % (QUAD_NAMES[self.auto.q], self.auto.net, self.acc))
+            if self.auto.back_in_start() and passed_start(self.theta, self.theta_start,
+                                                          self.direction):
+                self.state = "PARADO"
+                self.say("VOLTA COMPLETA, giro acumulado = %.0f graus. PARADO. Estados: %s"
+                         % (abs(self.acc), " -> ".join(QUAD_NAMES[q] for q in self.auto.history)))
+            elif self.now - self.t_giro > self.a["giro-timeout-s"]:
+                self.state = "PARADO"
+                self.say("TIMEOUT do giro (%.0f s), giro acumulado = %.0f graus. PARADO."
+                         % (self.a["giro-timeout-s"], self.acc))
+            else:
+                left, right = self.spin_cmd(self.direction)
+        return left, right
+
+    def status(self, h, left, right):
+        """Linha da tela. Rumo, erro e quadrante so aparecem no RETA e no GIRO."""
+        alvo, err = self.err_info()
+        if self.state == "RETA":
+            quad = QUAD_NAMES[quadrant_of(math.cos(self.theta), math.sin(self.theta))]
+            body = "rumo=%5.1f alvo=%5.1f erro=%+6.1f %s" % (h, alvo, err, quad)
+            short = "rumo=%5.1f erro=%+6.1f" % (h, err)
+        elif self.state == "GIRO":
+            body = "rumo=%5.1f erro=%4.0f %s" % (h, err, QUAD_NAMES[self.auto.q])
+            short = "rumo=%5.1f erro=%4.0f" % (h, err)
+        else:
+            body = short = "rumo=%5.1f" % h
+        if self.prompt == "sentido":
+            s = "SENTIDO? h=horario a=anti Esc=cancela | %s %s (%4d,%4d)" % (
+                self.state, short, left, right)
+        elif self.prompt == "vel":
+            s = "v 0-%d: %s_ Enter=ok Esc=cancela | %s %s (%4d,%4d)" % (
+                CMD_MAX, self.buf, self.state, short, left, right)
+        else:
+            s = "%-6s %s v=%3d cmd=(%4d,%4d)" % (self.state, body, self.vel, left, right)
+        return s[:79].ljust(79)
 
 
-def run_mission(boat, a, log_path, verbose=True):
-    """Executa RETA -> GIRO -> FIM. Devolve um dicionario com o resultado."""
+def run_keys(boat, keys, a, log_path, verbose=True):
+    """Laco do modo teclado. Devolve a KeyMission (ou None se parou antes de iniciar)."""
     period = 1.0 / a["hz"]
-    direction = 1 if a["sentido"] == "esq" else -1
-    res = {"fim": None, "giro_acum_deg": 0.0, "historico": [], "log": log_path}
-
+    m = None
     f = open(log_path, "w")
     f.write("# missao1 calib=%s args=%s\n" % (boat.calib_path, json.dumps(a, sort_keys=True)))
     f.write(",".join(LOG_COLS) + "\n")
-
-    def log(row):
-        f.write(",".join(str(row[k]) for k in LOG_COLS) + "\n")
-
-    state = "RETA"
-    theta_ref = mean_theta(boat)
-    if verbose:
-        print("Rumo alvo da reta: %.1f graus (bussola)" % theta_to_compass(theta_ref))
-    auto = None
-    theta_prev = None
-    acc = 0.0
-    t_state = boat.now()
+    reason = None
     try:
+        m = KeyMission(a, verbose)
+        if verbose:
+            print("Auto:   r=reta no rumo atual  t=volta (depois h/a)  v=velocidade  q=para")
+            print("Manual: m entra (w=frente a=esq d=dir s=para v=velocidade), m de novo sai")
+            print("Ctrl+C sai.")
+            print("Comecando PARADO, motores em 0.")
         while True:
             t_loop = boat.now()
             if stop_file_present():
-                res["fim"] = "arquivo STOP"
+                reason = "arquivo STOP"
                 break
-            theta, h, m = boat.heading()
-            err = wrap_pi(theta_ref - theta)
-            left = right = 0
-
-            if state == "RETA":
-                turn = max(-a["giro-max"], min(a["giro-max"], a["kp"] * err))
-                left, right = mix(a["empuxo"], turn)
-                if boat.now() - t_state >= a["reta-s"]:
-                    state = "GIRO"
-                    t_state = boat.now()
-                    theta_ref = theta          # rumo no inicio do giro
-                    err = 0.0
-                    auto = QuadrantAutomaton(theta_ref, direction, a["hist-deg"])
-                    theta_prev = theta
-                    acc = 0.0
-                    if verbose:
-                        print("\n-> GIRO, rumo inicial %.1f, estado %s"
-                              % (h, QUAD_NAMES[auto.q0]))
-
-            if state == "GIRO":
-                acc += math.degrees(wrap_pi(theta - theta_prev))
-                theta_prev = theta
-                d = auto.update(theta)
-                if d != 0 and verbose:
-                    print("\n   %s  transicoes liquidas = %d  giro acumulado = %.0f"
-                          % (QUAD_NAMES[auto.q], auto.net, acc))
-                if auto.back_in_start() and passed_start(theta, theta_ref, direction):
-                    state = "FIM"
-                    res["fim"] = "volta completa"
-                elif boat.now() - t_state > a["giro-timeout-s"]:
-                    state = "FIM"
-                    res["fim"] = "TIMEOUT do giro"
-                else:
-                    g = int(a["giro-cmd"])
-                    left, right = (0, g) if direction == 1 else (g, 0)
-
-            if state == "FIM":
-                left = right = 0
+            theta, h, mag = boat.heading()
+            m.update(theta, boat.now())
+            names = []
+            for ch in keys.read(boat.now()):
+                m.on_key(ch)
+                names.append(key_name(ch))
+            if keys.finished(boat.now()):
+                reason = "roteiro de teclas terminou"
+                break
+            left, right = m.control()
             boat.motors(left, right)
-            log({"t_s": "%.3f" % boat.now(), "estado": state,
-                 "quadrante": auto.q if auto else quadrant_of(math.cos(theta), math.sin(theta)),
-                 "transicoes": auto.net if auto else 0,
-                 "rumo_deg": "%.1f" % h, "theta_deg": "%.1f" % math.degrees(theta),
-                 "cos": "%.3f" % math.cos(theta), "sin": "%.3f" % math.sin(theta),
-                 "alvo_rumo_deg": "%.1f" % theta_to_compass(theta_ref),
-                 "erro_deg": "%.1f" % math.degrees(err), "giro_acum_deg": "%.1f" % acc,
-                 "cmd_esq": left, "cmd_dir": right,
-                 "mag_x": m[0], "mag_y": m[1], "mag_z": m[2]})
+            alvo, erro = m.err_info()
+            row = {"t_s": "%.3f" % boat.now(), "estado": m.state,
+                   "quadrante": m.auto.q if (m.auto and m.state == "GIRO")
+                   else quadrant_of(math.cos(theta), math.sin(theta)),
+                   "transicoes": m.auto.net if (m.auto and m.state == "GIRO") else 0,
+                   "rumo_deg": "%.1f" % h, "theta_deg": "%.1f" % math.degrees(theta),
+                   "cos": "%.3f" % math.cos(theta), "sin": "%.3f" % math.sin(theta),
+                   "alvo_rumo_deg": "%.1f" % alvo if alvo is not None else "",
+                   "erro_deg": "%.1f" % erro if erro is not None else "",
+                   "giro_acum_deg": "%.1f" % m.acc, "vel": m.vel,
+                   "tecla": "+".join(names), "cmd_esq": left, "cmd_dir": right,
+                   "mag_x": mag[0], "mag_y": mag[1], "mag_z": mag[2]}
+            f.write(",".join(str(row[k]) for k in LOG_COLS) + "\n")
             if verbose:
-                sys.stdout.write("\r%-4s t=%5.1f rumo=%5.1f erro=%6.1f cmd=(%3d,%3d)   "
-                                 % (state, boat.now(), h, math.degrees(err), left, right))
+                sys.stdout.write("\r" + m.status(h, left, right))
                 sys.stdout.flush()
-            if state == "FIM":
-                break
             boat.sleep(period - (boat.now() - t_loop))
     except StopRequested as e:
-        res["fim"] = "interrompido (%s)" % e
+        reason = "interrompido (%s)" % e
     finally:
         boat.stop()
         f.close()
-    res["giro_acum_deg"] = acc
-    res["historico"] = [QUAD_NAMES[q] for q in auto.history] if auto else []
     if verbose:
-        print("\nFim: %s. Giro acumulado = %.0f graus. Estados: %s"
-              % (res["fim"], acc, " -> ".join(res["historico"])))
-        print("Motores parados. Log:", log_path)
-    return res
+        print("\nFim: %s. Motores parados. Log: %s" % (reason, log_path))
+    return m
 
 
 # ---------------------------------------------------------------- modos
@@ -509,24 +842,55 @@ def mode_check(a):
         print("\nSaindo.")
 
 
+def ask_start_vel(default):
+    """Pergunta a velocidade inicial (antes de ligar qualquer coisa)."""
+    while True:
+        sys.stdout.write("Velocidade inicial v, 0 a %d (Enter = %d): " % (CMD_MAX, default))
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if line == "":
+            print("\nERRO: sem entrada de teclado.")
+            sys.exit(1)
+        line = line.strip()
+        if line == "":
+            return default
+        try:
+            v = int(line)
+        except ValueError:
+            print("ERRO: digite um numero inteiro.")
+            continue
+        if 0 <= v <= CMD_MAX:
+            return v
+        print("ERRO: fora do intervalo 0 a %d." % CMD_MAX)
+
+
 def mode_run(a):
     if os.path.isfile(STOP_FILE):
         print("ERRO: existe %s. Apague antes (rm data/STOP)." % STOP_FILE)
         sys.exit(1)
+    if not sys.stdin.isatty():
+        print("ERRO: o modo run precisa de um terminal (ssh ou screen). Nao rode com nohup.")
+        sys.exit(1)
+    a["vel"] = ask_start_vel(a["vel"])
+    print("v inicial = %d, giro %s" % (a["vel"], "simetrico (um motor para tras)"
+                                      if a["giro-re"] == "sim" else "com um motor so"))
     boat = RealBoat(a, motors=True)
     install_signals()            # depois do ArduinoIO, que instala o proprio SIGINT
     boat.stop()
+    keys = TtyKeys()
     print("Calibracao:", boat.calib_path)
-    print("Reta %.0f s (empuxo %d), depois volta para a %s com comando %d."
-          % (a["reta-s"], a["empuxo"], a["sentido"], a["giro-cmd"]))
-    run_mission(boat, a, new_log_path("missao1"))
+    try:
+        run_keys(boat, keys, a, new_log_path("missao1"))
+    finally:
+        keys.close()
 
 
 def mode_sim(a):
     boat = SimBoat()
     install_signals()
-    res = run_mission(boat, a, new_log_path("missao1_sim"))
-    return boat, res
+    keys = ScriptKeys(a["teclas"] or DEFAULT_SIM_KEYS)
+    m = run_keys(boat, keys, a, new_log_path("missao1_sim"))
+    return boat, m
 
 
 def mode_calib(a):
@@ -605,8 +969,14 @@ def parse_args(argv):
             sys.exit(1)
         v = argv[i + 1]
         key = k[2:]
-        if key in ("sentido", "calib", "drivers"):
+        if key in ("sentido", "giro-re", "calib", "drivers", "teclas"):
             a[key] = v
+        elif key == "vel":
+            try:
+                a[key] = int(v)
+            except ValueError:
+                print("ERRO: --vel precisa de um numero inteiro")
+                sys.exit(1)
         else:
             try:
                 a[key] = float(v)
@@ -617,12 +987,14 @@ def parse_args(argv):
     if a["sentido"] not in ("esq", "dir"):
         print("ERRO: --sentido esq ou dir")
         sys.exit(1)
-    for k in ("empuxo", "giro-cmd"):
-        if not 0 <= a[k] <= CMD_MAX:
-            print("ERRO: --%s entre 0 e %d" % (k, CMD_MAX))
-            sys.exit(1)
-    if a["hz"] <= 0 or a["reta-s"] < 0 or a["giro-timeout-s"] <= 0:
-        print("ERRO: --hz e --giro-timeout-s > 0, --reta-s >= 0")
+    if a["giro-re"] not in ("sim", "nao"):
+        print("ERRO: --giro-re sim ou nao")
+        sys.exit(1)
+    if not 0 <= a["vel"] <= CMD_MAX:
+        print("ERRO: --vel entre 0 e %d" % CMD_MAX)
+        sys.exit(1)
+    if a["hz"] <= 0 or a["giro-timeout-s"] <= 0:
+        print("ERRO: --hz e --giro-timeout-s devem ser > 0")
         sys.exit(1)
     if not 0 < a["hist-deg"] < 45:
         print("ERRO: --hist-deg entre 0 e 45")
