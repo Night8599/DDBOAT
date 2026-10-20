@@ -19,18 +19,19 @@ EARTH = 6378137.0
 SERVER_PORT = 6800
 BOAT_ID = 4
 SEND_PERIOD = 1.0
-POINTS = {"A": (48.198863, -3.015070), "B": (48.199072, -3.016258), "C": (48.197408, -3.015060),
-          "D": (48.1970689, -3.017328), "E": (48.199707, -3.016404), "F": (48.199814, -3.015137),
+POINTS = {"A": (48.198863, -3.015070), "B": (48.199072, -3.016258), "C": (48.198124, -3.015355),
+          "D": (48.198259, -3.017114), "E": (48.199628, -3.016379), "F": (48.199688, -3.015158),
           "G": (48.198944, -3.015478), "G'": (48.199027, -3.015887)}
 ROUTE = ("G", "C", "D", "G'", "E", "F", "G", "A")
 CONFIG = {"speed": 120, "kp": 60.0, "turn_max": 90.0, "hz": 10.0, "arrival_radius": 2.0,
           "near_radius": 3.0, "near_time_s": 4.0, "point_intensity": 1.0, "segment_intensity": 2.0,
           "speed_gain": 6.0, "min_speed": 50, "gps_timeout_s": 3.0, "out_distance": 10.0,
           "out_time_s": 3.0, "kf_acc_sigma": 0.3, "kf_gps_sigma": 2.0, "kf_gate": 9.21,
-          "kf_reset_after": 5}
+          "kf_reset_after": 5, "rep_radius": 20.0, "rep_intensity": 6700.0, "rep_min_dist": 1.0,
+          "boat_max_age_s": 5.0}
 COLUMNS = ["t_s", "state", "lat", "lon", "gps_age_s", "gps_new", "x_m", "y_m", "vx_mps", "vy_mps",
            "leg", "dist_m", "out_m", "target_deg", "heading_deg", "error_deg", "speed", "speed_cmd",
-           "key", "cmd_left", "cmd_right", "kf", "mag_x", "mag_y", "mag_z"]
+           "key", "cmd_left", "cmd_right", "kf", "rep_n", "rep_min_m", "mag_x", "mag_y", "mag_z"]
 LAT0, LON0 = math.radians(POINTS["B"][0]), math.radians(POINTS["B"][1])
 
 
@@ -96,10 +97,48 @@ def gradient(p, start, target):
             -2.0 * (p[1] - target[1]) * ip - 2.0 * (p[1] - cy) * sg)
 
 
-def guidance(p, theta, speed, start, target):
+class OtherBoats(object):
+    def __init__(self):
+        self.positions = []
+        self.last_seen = {}
+
+    @property
+    def count(self):
+        return len(self.positions)
+
+    def update(self, boats):
+        self.positions = []
+        for boat_id, b in boats.items():
+            if boat_id == BOAT_ID:
+                continue
+            self.last_seen[boat_id] = (b["lat"], b["lon"])
+            if b["age"] <= CONFIG["boat_max_age_s"]:
+                self.positions.append(xy(b["lat"], b["lon"]))
+
+    def nearest(self, p):
+        if p is None or not self.positions:
+            return None
+        return min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in self.positions)
+
+    def repulsion(self, p):
+        rx = ry = 0.0
+        radius = CONFIG["rep_radius"]
+        for q in self.positions:
+            dx, dy = p[0] - q[0], p[1] - q[1]
+            d = math.hypot(dx, dy)
+            if d >= radius:
+                continue
+            ux, uy = (dx / d, dy / d) if d > 1e-9 else (1.0, 0.0)
+            dc = max(d, CONFIG["rep_min_dist"])
+            mag = CONFIG["rep_intensity"] * (1.0 / dc - 1.0 / radius) / (dc * dc)
+            rx, ry = rx + mag * ux, ry + mag * uy
+        return rx, ry
+
+
+def guidance(p, theta, speed, start, target, rep):
     gx, gy = gradient(p, start, target)
     cmd = int(round(min(float(speed), max(float(CONFIG["min_speed"]), CONFIG["speed_gain"] * math.hypot(gx, gy)))))
-    desired = math.atan2(gy, gx)
+    desired = math.atan2(gy + rep[1], gx + rep[0])
     err = wrap(desired - theta)
     lim = min(CONFIG["turn_max"], float(cmd))
     left, right = mix(cmd, max(-lim, min(lim, CONFIG["kp"] * err)))
@@ -359,7 +398,7 @@ class Mission(object):
         self.pos = self.age = self.g = self.out = self.paused = self.start = None
         self.out_since = self.near_since = None
         self.end = "arrived"
-        self.boats = 0
+        self.others = OtherBoats()
 
     def say(self, text):
         print("\n" + text)
@@ -379,7 +418,7 @@ class Mission(object):
         self.g = None
         if self.fresh and self.start is not None:
             start, target = self.leg_points()
-            self.g = guidance(self.pos, self.theta, self.speed, start, target)
+            self.g = guidance(self.pos, self.theta, self.speed, start, target, self.others.repulsion(self.pos))
 
     def update(self, theta, now, pos, age):
         self.theta, self.now, self.pos, self.age = theta, now, pos, age
@@ -461,13 +500,13 @@ class Mission(object):
         if self.state in ("ROUTE", "RETURN") and g is not None:
             text = "%-6s %-2s hdg=%5.1f tgt=%5.1f err=%+6.1f d=%5.1f o=%5.1f %s gps=%s n=%d" % (
                 self.state, self.target_name(), h, to_compass(g["desired"]), -math.degrees(g["err"]),
-                g["dist"], self.out, cmd, age, self.boats)
+                g["dist"], self.out, cmd, age, self.others.count)
         else:
-            text = "%-7s hdg=%5.1f %s gps=%s n=%d" % (self.state, h, cmd, age, self.boats)
+            text = "%-7s hdg=%5.1f %s gps=%s n=%d" % (self.state, h, cmd, age, self.others.count)
         return text[:79].ljust(79)
 
 
-def write_kml(path, track, raw, start):
+def write_kml(path, track, raw, start, others):
     def pt(label, p, style):
         return ("<Placemark><name>%s</name><styleUrl>#%s</styleUrl><Point><coordinates>%.7f,%.7f,0"
                 "</coordinates></Point></Placemark>" % (label, style, p[1], p[0]))
@@ -480,7 +519,8 @@ def write_kml(path, track, raw, start):
     styles = "".join('<Style id="%s"><IconStyle><color>%s</color><scale>1.2</scale><Icon><href>'
                      'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>'
                      '</IconStyle></Style>' % s for s in (("a", "ff00ff00"), ("b", "ffff0000"), ("edge", "ff0000ff"),
-                                                          ("mid", "ff00ffff"), ("end", "ffff00ff")))
+                                                          ("mid", "ff00ffff"), ("end", "ffff00ff"),
+                                                          ("other", "ff00a5ff")))
     styles += "".join('<Style id="%s"><LineStyle><color>%s</color><width>%d</width></LineStyle></Style>' % s
                       for s in (("route", "ff00ff00", 4), ("raw", "ff0080ff", 2), ("guide", "ffffffff", 3),
                                 ("wall", "ff0000ff", 3)))
@@ -495,6 +535,7 @@ def write_kml(path, track, raw, start):
         items.append(ln(raw, "raw", 0))
     if track:
         items += [pt("i", track[0], "end"), pt("f", track[-1], "end")]
+    items += [pt("boat %d" % boat_id, others[boat_id], "other") for boat_id in sorted(others)]
     with open(path, "w") as f:
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
                 "%s%s</Document></kml>\n" % (styles, "".join(items)))
@@ -535,7 +576,7 @@ def run(boat, keys, mission, log_path, kml_path):
                 except Exception:
                     pass
                 boats = get_boats()
-                mission.boats = len(boats)
+                mission.others.update(boats)
                 for boat_id, b in sorted(boats.items()):
                     boats_log.write("%.3f,%d,%.7f,%.7f,%.1f,%.1f\n" % (now, boat_id, b["lat"], b["lon"], b["cap"], b["age"]))
             last = boat.last_gps()
@@ -551,7 +592,8 @@ def run(boat, keys, mission, log_path, kml_path):
                    pos and kf.x[2], pos and kf.x[3], mission.target_name(), mission.g and mission.g["dist"], mission.out,
                    None if desired is None else to_compass(desired), h,
                    None if err is None else -math.degrees(err), mission.speed, speed_cmd,
-                   "+".join(key_name(k) for k in pressed), left, right, result] + list(mag)
+                   "+".join(key_name(k) for k in pressed), left, right, result,
+                   mission.others.count, mission.others.nearest(pos)] + list(mag)
             log.write(",".join("" if v is None else "%.3f" % v if isinstance(v, float) else str(v) for v in row) + "\n")
             if now - last_flush >= 5.0:
                 log.flush()
@@ -574,7 +616,7 @@ def run(boat, keys, mission, log_path, kml_path):
         try:
             if pos is not None:
                 track.append(latlon(*pos))
-            write_kml(kml_path, track, raw, mission.start)
+            write_kml(kml_path, track, raw, mission.start, mission.others.last_seen)
             print("\nKML: %s" % kml_path)
         except Exception as e:
             print("\nWARNING: KML not written (%r)" % (e,))
