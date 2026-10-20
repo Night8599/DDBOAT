@@ -44,7 +44,7 @@ _lock = threading.Lock()
 _boats = {}                  # id -> {"lat", "lon", "cap", "t"}  (t = instant de la position)
 _listener_started = False
 
-
+SERVER_IP = "172.20.26.99"
 
 
 def _listen():
