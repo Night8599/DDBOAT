@@ -21,7 +21,7 @@ BOAT_ID = 4
 SEND_PERIOD = 1.0
 POINTS = {"A": (48.198863, -3.015070), "B": (48.199072, -3.016258), "C": (48.198124, -3.015355),
           "D": (48.198259, -3.017114), "E": (48.199628, -3.016379), "F": (48.199688, -3.015158),
-          "S": (48.1984700, -3.0161187)}
+          "S": (48.198904, -3.015274)}
 CONFIG = {"speed": 120, "kp": 60.0, "turn_max": 90.0, "hz": 10.0, "arrival_radius": 2.0,
           "near_radius": 3.0, "near_time_s": 4.0, "point_intensity": 1.0, "segment_intensity": 2.0,
           "speed_gain": 6.0, "min_speed": 50, "gps_timeout_s": 3.0, "out_distance": 10.0,
