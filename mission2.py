@@ -44,6 +44,8 @@ DEFAULTS = {"speed": 120, "kp": 60.0, "turn_max": 90.0,
             "gps_timeout_s": 3.0,
             "corridor": "arm", "corridor_margin": 3.0, "corridor_arm": 10.0,
             "turn_mode": "arc", "pivot_on": 60.0, "pivot_off": 20.0,
+            "barrier_overshoot": 5.0, "barrier_hold_s": 1.0, "barrier_timeout_s": 120.0,
+            "countdown_s": 10.0,
             "kf_acc_sigma": 0.3, "kf_gps_sigma": 2.0, "kf_gate": 9.21, "kf_reset_after": 5,
             "hz": 10.0, "manual_reverse": "yes",
             "start": None, "goal": None, "calib": None, "drivers": None}
@@ -51,6 +53,9 @@ DEFAULTS = {"speed": 120, "kp": 60.0, "turn_max": 90.0,
 STOPPED = "PARADO"
 MISSION = "MISSAO"
 NO_GPS = "SEM_GPS"
+COUNTDOWN = "CONTAGEM"
+OUTBOUND = "IDA"
+RETURNING = "VOLTA"
 MANUAL_STOP = "MANUAL"
 FORWARD = "FRENTE"
 SPIN_LEFT = "VIRA_E"
@@ -63,13 +68,15 @@ USAGE = (
     "  check  sem motor: posicao filtrada, distancia, rumo desejado, erro e velocidade\n"
     "  run    missao com motores. Teclas: g inicia | v velocidade | q para\n"
     "         m modo manual (w a d s v, m sai) | Ctrl+C sai. Gera o KML da rota no fim\n"
+    "  barrier  autonomo: contagem, segue reto ate cruzar a linha E-F, meia-volta e volta ao A\n"
     "  kml    python3 mission2.py kml ARQUIVO.csv  converte um log da missao em KML\n"
     "Opcoes: --start LAT,LON --goal LAT,LON --arrival-radius M --speed N --min-speed N\n"
     "        --speed-gain X --point-intensity X --segment-intensity X --kp X --turn-max X\n"
     "        --gps-timeout-s X --kf-acc-sigma X --kf-gps-sigma X --kf-gate X\n"
     "        --kf-reset-after N --hz X --manual-reverse yes|no --calib ARQUIVO --drivers PASTA\n"
     "        --corridor off|arm|strict --corridor-margin M --corridor-arm M --turn-mode arc|pivot\n"
-    "        --pivot-on GRAUS --pivot-off GRAUS")
+    "        --pivot-on GRAUS --pivot-off GRAUS\n"
+    "        --countdown-s S --barrier-overshoot M --barrier-hold-s S --barrier-timeout-s S")
 
 
 def wrap_pi(a):
@@ -690,6 +697,8 @@ class Mission(object):
         self.deep = False
         self.corridor_dist = None
         self.pivoting = False
+        self.paused_from = MISSION
+        self.end_reason = "chegada"
         self.verbose = verbose
         self.speed = int(args["speed"])
         self.manual_mode = False
@@ -832,6 +841,19 @@ class Mission(object):
         elif ch in ("w", "a", "s", "d"):
             self.say("Tecla %s so vale no modo manual (m). Aqui, q para." % ch)
 
+    def log_heading(self):
+        g = self.guidance
+        return (None, None) if g is None else (g["desired"], g["err"])
+
+    def log_speed(self):
+        g = self.guidance
+        return None if g is None else g["speed_cmd"]
+
+    def help_lines(self):
+        return ["Auto:   g=inicia a missao  v=velocidade  q=para",
+                "Manual: m entra (w=frente a=esq d=dir s=para v=velocidade), m de novo sai",
+                "Ctrl+C sai. Comecando PARADO, motores em 0."]
+
     def drive(self, g):
         if self.args["turn_mode"] == "pivot":
             err_deg = abs(math.degrees(g["err"]))
@@ -845,15 +867,16 @@ class Mission(object):
 
     def control(self):
         left = right = 0
-        if self.state == MISSION or self.state == NO_GPS:
+        if self.state in (MISSION, RETURNING, NO_GPS):
             if self.guidance is None:
-                if self.state == MISSION:
+                if self.state != NO_GPS:
+                    self.paused_from = self.state
                     self.state = NO_GPS
                     self.say("GPS sem fix novo ha mais de %.0f s: motores parados ate voltar"
                              % self.args["gps_timeout_s"])
             else:
                 if self.state == NO_GPS:
-                    self.state = MISSION
+                    self.state = self.paused_from
                     self.say("GPS voltou: missao retomada")
                 g = self.guidance
                 if g["distance"] <= self.args["arrival_radius"]:
@@ -886,13 +909,13 @@ class Mission(object):
         tag = ""
         if self.corridor is not None and self.outside:
             tag += " FORA"
-        if self.pivoting and self.state == MISSION:
+        if self.pivoting and self.state in (MISSION, RETURNING):
             tag += " PIVO"
         if self.prompt == "speed":
             brief = "rumo=%5.1f" % h if g is None else "rumo=%5.1f d=%5.1f" % (h, g["distance"])
             s = "v 0-%d: %s_ Enter=ok Esc=cancela | %s %s (%4d,%4d)" % (
                 CMD_MAX, self.buf, self.state, brief, left, right)
-        elif self.state == MISSION and g is not None:
+        elif self.state in (MISSION, RETURNING) and g is not None:
             s = "%-7s rumo=%5.1f alvo=%5.1f erro=%+6.1f d=%5.1f cmd=(%3d,%3d) gps=%s%s" % (
                 self.state, h, theta_to_compass(g["desired"]), -math.degrees(g["err"]),
                 g["distance"], left, right, gps_text, tag)
@@ -906,7 +929,165 @@ class Mission(object):
         return s[:79].ljust(79)
 
 
+class BarrierMission(Mission):
+    def __init__(self, args, field, start_xy, goal_xy, corridor, verbose=True):
+        Mission.__init__(self, args, field, start_xy, goal_xy, corridor, verbose)
+        self.state = COUNTDOWN
+        self.recent = []
+        self.countdown_started = None
+        self.countdown_remaining = args["countdown_s"]
+        self.waiting_gps_said = False
+        self.ref_theta = None
+        self.phase_started = 0.0
+        self.cross_since = None
+        self.turn_done = False
+
+    def help_lines(self):
+        return ["Modo barreira, 100% autonomo: contagem, ida reta ate cruzar a linha E-F, meia-volta, volta ao A.",
+                "Unica tecla: q aborta. Ctrl+C sai. Comecando com motores em 0."]
+
+    def update(self, theta, now, position, gps_age):
+        Mission.update(self, theta, now, position, gps_age)
+        self.recent.append(theta)
+        if len(self.recent) > 10:
+            del self.recent[0]
+
+    def barrier_distance(self):
+        return None if self.corridor_dist is None else self.corridor_dist[1]
+
+    def log_heading(self):
+        if self.state == OUTBOUND and self.ref_theta is not None:
+            return self.ref_theta, wrap_pi(self.ref_theta - self.theta)
+        return Mission.log_heading(self)
+
+    def log_speed(self):
+        if self.state == OUTBOUND:
+            return self.speed
+        return Mission.log_speed(self)
+
+    def abort(self, why):
+        self.state = STOPPED
+        self.finished = True
+        self.end_reason = "abortado"
+        self.say(why)
+
+    def on_key(self, ch):
+        if ch == "q":
+            self.abort("ABORTADO (tecla q)")
+        else:
+            self.say("Modo barreira e autonomo: so a tecla q aborta.")
+
+    def captured_theta(self):
+        c = sum(math.cos(t) for t in self.recent)
+        s = sum(math.sin(t) for t in self.recent)
+        return math.atan2(s, c)
+
+    def countdown_step(self):
+        if self.countdown_started is None:
+            self.countdown_started = self.now
+            self.say("CONTAGEM de %.0f s. Solte o barco e aponte para a barreira (linha E-F). q aborta."
+                     % self.args["countdown_s"])
+        self.countdown_remaining = max(0.0, self.args["countdown_s"] - (self.now - self.countdown_started))
+        if self.countdown_remaining > 0.0:
+            return 0, 0
+        if self.guidance is None:
+            if not self.waiting_gps_said:
+                self.waiting_gps_said = True
+                self.say("Contagem terminada: aguardando fix do GPS para sair")
+            return 0, 0
+        self.ref_theta = self.captured_theta()
+        self.phase_started = self.now
+        self.cross_since = None
+        self.state = OUTBOUND
+        self.armed = False
+        self.say("IDA: rumo %.1f graus mantido ate %.0f m alem da linha E-F, v=%d (barreira a %.1f m)"
+                 % (theta_to_compass(self.ref_theta), self.args["barrier_overshoot"], self.speed,
+                    self.barrier_distance()))
+        return self.outbound_step()
+
+    def cross_barrier(self, timed_out):
+        beyond = -self.barrier_distance()
+        self.state = RETURNING
+        self.armed = False
+        self.pivoting = False
+        self.cross_since = None
+        self.turn_done = False
+        if timed_out:
+            self.say("TEMPO esgotado: barreira nao cruzada em %.0f s (%.1f m ate a linha). Voltando ao ponto A"
+                     % (self.args["barrier_timeout_s"], self.barrier_distance()))
+        else:
+            self.say("BARREIRA cruzada: %.1f m alem da linha E-F. Meia-volta e retorno ao ponto A" % beyond)
+        return Mission.control(self)
+
+    def outbound_step(self):
+        if self.guidance is None:
+            self.paused_from = OUTBOUND
+            self.state = NO_GPS
+            self.say("GPS sem fix novo ha mais de %.0f s: motores parados ate voltar"
+                     % self.args["gps_timeout_s"])
+            return 0, 0
+        south = self.corridor_dist[0]
+        if self.corridor is not None and south < -self.args["corridor_margin"]:
+            self.abort("ABORTADO: SAIU DO CORREDOR (%s) na ida" % CORRIDOR_NAMES[0])
+            return 0, 0
+        if -self.barrier_distance() >= self.args["barrier_overshoot"]:
+            if self.cross_since is None:
+                self.cross_since = self.now
+            if self.now - self.cross_since >= self.args["barrier_hold_s"]:
+                return self.cross_barrier(False)
+        else:
+            self.cross_since = None
+        timeout = self.args["barrier_timeout_s"]
+        if timeout > 0 and self.now - self.phase_started >= timeout:
+            return self.cross_barrier(True)
+        err = wrap_pi(self.ref_theta - self.theta)
+        lim = min(self.args["turn_max"], float(self.speed))
+        turn = max(-lim, min(lim, self.args["kp"] * err))
+        return mix(self.speed, turn)
+
+    def control(self):
+        if self.state == NO_GPS and self.paused_from in (OUTBOUND, COUNTDOWN):
+            if self.guidance is None:
+                return 0, 0
+            self.state = self.paused_from
+            self.say("GPS voltou: retomando")
+        if self.state == COUNTDOWN:
+            return self.countdown_step()
+        if self.state == OUTBOUND:
+            return self.outbound_step()
+        left, right = Mission.control(self)
+        if self.state == STOPPED and not self.finished:
+            self.finished = True
+            self.end_reason = "abortado"
+        g = self.guidance
+        if self.state == RETURNING and not self.turn_done and g is not None and abs(math.degrees(g["err"])) <= 20.0:
+            self.turn_done = True
+            self.say("MEIA-VOLTA concluida: alinhado com o retorno (erro %.0f graus)" % abs(math.degrees(g["err"])))
+        return left, right
+
+    def status(self, h, left, right):
+        gps_text = "---" if self.gps_age is None else "%.1f" % self.gps_age
+        if self.state == COUNTDOWN:
+            if self.countdown_remaining > 0.0:
+                s = "%-8s %3.0fs rumo=%5.1f aponte para a barreira E-F gps=%s" % (
+                    self.state, self.countdown_remaining, h, gps_text)
+            else:
+                s = "%-8s rumo=%5.1f aguardando o GPS gps=%s" % (self.state, h, gps_text)
+            return s[:79].ljust(79)
+        if self.state == OUTBOUND:
+            bar = self.barrier_distance()
+            s = "%-7s rumo=%5.1f ref=%5.1f erro=%+6.1f bar=%+6.1f cmd=(%3d,%3d) gps=%s" % (
+                self.state, h, theta_to_compass(self.ref_theta),
+                -math.degrees(wrap_pi(self.ref_theta - self.theta)),
+                0.0 if bar is None else bar, left, right, gps_text)
+            return s[:79].ljust(79)
+        return Mission.status(self, h, left, right)
+
+
 EVENT_NAMES = (("MISSAO iniciada", "Inicio (g)"), ("CHEGOU", "Chegada"),
+               ("IDA:", "Inicio da ida"), ("BARREIRA cruzada", "Barreira cruzada"),
+               ("TEMPO esgotado", "Tempo esgotado"), ("MEIA-VOLTA", "Meia-volta concluida"),
+               ("ABORTADO", "Abortado"),
                ("SAIU DO CORREDOR", "Saiu do corredor"), ("GPS sem fix novo", "GPS perdido"),
                ("GPS voltou", "GPS voltou"), ("PARADO (tecla q)", "Parada (q)"))
 
@@ -1045,9 +1226,13 @@ def mode_kml(args):
             name = None
             if state == MISSION:
                 name = "Inicio (g)" if previous != NO_GPS else "GPS voltou"
+            elif state == OUTBOUND:
+                name = "Inicio da ida" if previous != NO_GPS else "GPS voltou"
+            elif state == RETURNING:
+                name = "Barreira cruzada" if previous == OUTBOUND else "GPS voltou"
             elif state == NO_GPS:
                 name = "GPS perdido"
-            elif state == STOPPED and previous == MISSION:
+            elif state == STOPPED and previous in (MISSION, RETURNING):
                 name = ("Chegada" if last_distance is not None and last_distance <= merged["arrival_radius"] + 0.5
                         else "Parada")
             if name is not None:
@@ -1070,11 +1255,11 @@ def fmt(value, spec):
 
 
 def run_mission(boat, keys, args, frame, field, start_xy, goal_xy, corridor, log_path,
-                verbose=True, kml_path=None):
+                verbose=True, kml_path=None, mission_class=Mission):
     period = 1.0 / args["hz"]
     kf = PositionKalman(args["kf_acc_sigma"], args["kf_gps_sigma"], args["kf_gate"],
                         args["kf_reset_after"])
-    mission = Mission(args, field, start_xy, goal_xy, corridor, verbose)
+    mission = mission_class(args, field, start_xy, goal_xy, corridor, verbose)
     track = []
     raw_track = []
     last_track = -1.0
@@ -1088,9 +1273,8 @@ def run_mission(boat, keys, args, frame, field, start_xy, goal_xy, corridor, log
     prev_loop_start = None
     try:
         if verbose:
-            print("Auto:   g=inicia a missao  v=velocidade  q=para")
-            print("Manual: m entra (w=frente a=esq d=dir s=para v=velocidade), m de novo sai")
-            print("Ctrl+C sai. Comecando PARADO, motores em 0.")
+            for line in mission.help_lines():
+                print(line)
         while True:
             t_loop = boat.now()
             loop_ms = 0.0 if prev_loop_start is None else (t_loop - prev_loop_start) * 1000.0
@@ -1128,6 +1312,8 @@ def run_mission(boat, keys, args, frame, field, start_xy, goal_xy, corridor, log
             left, right = mission.control()
             boat.motors(left, right)
             g = mission.guidance
+            desired, err = mission.log_heading()
+            speed_cmd = mission.log_speed()
             cd = mission.corridor_dist
             velocity = kf.velocity() if kf.initialized() else (None, None)
             row = {"t_s": "%.3f" % now, "estado": mission.state,
@@ -1146,11 +1332,11 @@ def run_mission(boat, keys, args, frame, field, start_xy, goal_xy, corridor, log
                    "grad_x": fmt(None if g is None else g["gx"], "%.3f"),
                    "grad_y": fmt(None if g is None else g["gy"], "%.3f"),
                    "grad_norm": fmt(None if g is None else g["norm"], "%.3f"),
-                   "alvo_rumo_deg": fmt(None if g is None else theta_to_compass(g["desired"]), "%.1f"),
+                   "alvo_rumo_deg": fmt(None if desired is None else theta_to_compass(desired), "%.1f"),
                    "rumo_deg": "%.1f" % h,
-                   "erro_deg": fmt(None if g is None else -math.degrees(g["err"]), "%.1f"),
+                   "erro_deg": fmt(None if err is None else -math.degrees(err), "%.1f"),
                    "vel": mission.speed,
-                   "vel_cmd": "" if g is None else g["speed_cmd"],
+                   "vel_cmd": "" if speed_cmd is None else speed_cmd,
                    "tecla": "+".join(names), "cmd_esq": left, "cmd_dir": right,
                    "kf": kf_status, "loop_ms": "%.0f" % loop_ms, "read_ms": "%.0f" % read_ms,
                    "mag_x": mag[0], "mag_y": mag[1], "mag_z": mag[2]}
@@ -1162,7 +1348,7 @@ def run_mission(boat, keys, args, frame, field, start_xy, goal_xy, corridor, log
                 sys.stdout.write("\r" + mission.status(h, left, right))
                 sys.stdout.flush()
             if mission.finished:
-                reason = "chegada"
+                reason = mission.end_reason
                 break
             boat.sleep(period - (boat.now() - t_loop))
     except StopRequested as e:
@@ -1365,6 +1551,41 @@ def mode_run(args):
         boat.close()
 
 
+def mode_barrier(args):
+    if os.path.isfile(STOP_FILE):
+        print("ERRO: existe %s. Apague antes (rm data/STOP)." % STOP_FILE)
+        sys.exit(1)
+    if not sys.stdin.isatty():
+        print("ERRO: o modo barrier precisa de um terminal (ssh ou screen). Nao rode com nohup.")
+        sys.exit(1)
+    frame, start_xy, goal_xy, field, corridor = resolve_geometry(args)
+    users = find_port_users(ARDUINO_TTY)
+    if users:
+        print("ERRO: outro processo ja esta usando %s." % ARDUINO_TTY)
+        print("Dois programas mandando comandos ao mesmo tempo fazem os motores tremer:")
+        for pid, cmd in users:
+            print("   PID %d: %s" % (pid, cmd))
+        print("Encerre com: kill PID   (confira tambem: screen -ls)")
+        sys.exit(1)
+    args["speed"] = ask_start_speed(args["speed"])
+    boat = RealBoat(args, motors=True, gps=True)
+    install_signals()
+    boat.stop()
+    keys = TtyKeys()
+    print("Calibracao:", boat.calib_path)
+    describe_geometry(frame, goal_xy, corridor, args)
+    print("Barreira: linha E-F (norte). Contagem de %.0f s, depois segue reto com v=%d ate %.0f m alem da linha,"
+          % (args["countdown_s"], args["speed"], args["barrier_overshoot"]))
+    print("faz a meia-volta e volta ao ponto A (raio de chegada %.1f m). So a tecla q aborta." % args["arrival_radius"])
+    log_path = new_log_path("mission2_barrier")
+    try:
+        run_mission(boat, keys, args, frame, field, start_xy, goal_xy, corridor, log_path,
+                    kml_path=log_path[:-4] + ".kml", mission_class=BarrierMission)
+    finally:
+        keys.close()
+        boat.close()
+
+
 def mode_calib(args):
     imu_mod = load_drivers(args["drivers"])
     imu = imu_mod.Imu9IO()
@@ -1468,7 +1689,7 @@ def parse_args(argv):
         print("ERRO: --speed e --min-speed entre 0 e %d" % CMD_MAX)
         sys.exit(1)
     positive = ("arrival_radius", "point_intensity", "segment_intensity", "speed_gain", "gps_timeout_s",
-                "kf_acc_sigma", "kf_gps_sigma", "kf_gate", "hz", "kp", "turn_max")
+                "kf_acc_sigma", "kf_gps_sigma", "kf_gate", "hz", "kp", "turn_max", "barrier_overshoot")
     for key in positive:
         if args[key] <= 0:
             print("ERRO: --%s deve ser > 0" % key.replace("_", "-"))
@@ -1485,6 +1706,10 @@ def parse_args(argv):
     if not 0 < args["pivot_off"] < args["pivot_on"] < 180:
         print("ERRO: use 0 < --pivot-off < --pivot-on < 180")
         sys.exit(1)
+    for key in ("barrier_hold_s", "barrier_timeout_s", "countdown_s"):
+        if args[key] < 0:
+            print("ERRO: --%s deve ser >= 0" % key.replace("_", "-"))
+            sys.exit(1)
     if args["kf_reset_after"] < 1:
         print("ERRO: --kf-reset-after deve ser >= 1")
         sys.exit(1)
@@ -1492,7 +1717,8 @@ def parse_args(argv):
 
 
 if __name__ == "__main__":
-    modes = {"calib": mode_calib, "gps": mode_gps, "check": mode_check, "run": mode_run, "kml": mode_kml}
+    modes = {"calib": mode_calib, "gps": mode_gps, "check": mode_check, "run": mode_run,
+             "barrier": mode_barrier, "kml": mode_kml}
     if len(sys.argv) < 2 or sys.argv[1] not in modes:
         print(USAGE)
         sys.exit(1)
