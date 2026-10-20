@@ -21,16 +21,16 @@ BOAT_ID = 4
 SEND_PERIOD = 1.0
 POINTS = {"A": (48.198863, -3.015070), "B": (48.199072, -3.016258), "C": (48.198124, -3.015355),
           "D": (48.198259, -3.017114), "E": (48.199628, -3.016379), "F": (48.199688, -3.015158),
-          "S": (48.198904, -3.015274)}
+          "S": (48.1989035, -3.0152740)}
 CONFIG = {"speed": 120, "kp": 60.0, "turn_max": 90.0, "hz": 10.0, "arrival_radius": 2.0,
           "near_radius": 3.0, "near_time_s": 4.0, "point_intensity": 1.0, "segment_intensity": 2.0,
-          "speed_gain": 6.0, "min_speed": 50, "gps_timeout_s": 3.0, "out_distance": 10.0,
+          "gps_timeout_s": 3.0, "out_distance": 10.0,
           "out_time_s": 3.0, "kf_acc_sigma": 0.3, "kf_gps_sigma": 2.0, "kf_gate": 9.21,
           "kf_reset_after": 5, "rep_radius": 20.0, "rep_intensity": 6700.0, "rep_min_dist": 1.0,
-          "boat_max_age_s": 5.0, "zone_radius": 5.0, "zone_enter_s": 5.0, "hold_s": 60.0, "hold_min": 50, "hold_max": 160, "hold_gain": 50.0}
+          "boat_max_age_s": 5.0, "zone_radius": 5.0, "zone_enter_s": 3.0, "hold_s": 60.0, "hold_min": 50, "hold_max": 100, "hold_gain": 50.0}
 COLUMNS = ["t_s", "state", "lat", "lon", "gps_age_s", "gps_new", "x_m", "y_m", "vx_mps", "vy_mps",
            "target", "dist_m", "out_m", "target_deg", "heading_deg", "error_deg", "speed", "speed_cmd",
-           "key", "cmd_left", "cmd_right", "kf", "rep_n", "rep_min_m", "in_zone", "hold_s", "mag_x", "mag_y", "mag_z"]
+           "key", "cmd_left", "cmd_right", "kf", "rep_n", "rep_min_m", "in_zone", "hold_s", "parked", "mag_x", "mag_y", "mag_z"]
 LAT0, LON0 = math.radians(POINTS["B"][0]), math.radians(POINTS["B"][1])
 
 
@@ -134,10 +134,8 @@ class OtherBoats(object):
         return rx, ry
 
 
-def guidance(p, theta, speed, start, target, rep, cmd=None):
+def guidance(p, theta, start, target, rep, cmd):
     gx, gy = gradient(p, start, target)
-    if cmd is None:
-        cmd = int(round(min(float(speed), max(float(CONFIG["min_speed"]), CONFIG["speed_gain"] * math.hypot(gx, gy)))))
     desired = math.atan2(gy + rep[1], gx + rep[0])
     err = wrap(desired - theta)
     lim = min(CONFIG["turn_max"], float(cmd))
@@ -394,6 +392,7 @@ class Mission(object):
         self.state = "WAITING"
         self.finished = self.fresh = False
         self.theta = self.now = 0.0
+        self.parked = False
         self.pos = self.age = self.g = self.out = self.paused = self.start = None
         self.out_since = self.near_since = self.inside_since = self.hold_start = None
         self.end = "arrived"
@@ -430,12 +429,10 @@ class Mission(object):
         self.g = None
         if self.fresh and self.start is not None:
             start, target = self.leg_points()
-            cmd = None
-            if self.mode() in ("HOLD", "BACK", "RETURN"):
-                distance = math.hypot(target[0] - self.pos[0], target[1] - self.pos[1])
-                ceiling = CONFIG["hold_max"] if self.mode() == "HOLD" else self.speed
-                cmd = int(round(max(float(CONFIG["hold_min"]), min(float(ceiling), CONFIG["hold_gain"] * distance))))
-            self.g = guidance(self.pos, self.theta, self.speed, start, target, self.others.repulsion(self.pos), cmd)
+            distance = math.hypot(target[0] - self.pos[0], target[1] - self.pos[1])
+            ceiling = CONFIG["hold_max"] if self.mode() == "HOLD" else self.speed
+            cmd = int(round(max(float(CONFIG["hold_min"]), min(float(ceiling), CONFIG["hold_gain"] * distance))))
+            self.g = guidance(self.pos, self.theta, start, target, self.others.repulsion(self.pos), cmd)
 
     def update(self, theta, now, pos, age):
         self.theta, self.now, self.pos, self.age = theta, now, pos, age
@@ -464,19 +461,25 @@ class Mission(object):
         if g["dist"] <= CONFIG["zone_radius"]:
             if self.inside_since is None:
                 self.inside_since = self.now
-            if self.hold_start is None and self.now - self.inside_since >= CONFIG["zone_enter_s"]:
-                self.hold_start = self.now
-                self.say("HOLD started: %.0f s inside the %.0f m zone" % (CONFIG["hold_s"], CONFIG["zone_radius"]))
-            if self.hold_start is not None and self.now - self.hold_start >= CONFIG["hold_s"]:
-                self.say("HOLD done: returning to point i")
-                self.state, self.near_since, self.inside_since, self.hold_start = "BACK", None, None, None
-                self.compute()
-                g = self.g
+            if self.now - self.inside_since >= CONFIG["zone_enter_s"]:
+                if self.hold_start is None:
+                    self.hold_start = self.now
+                    self.say("HOLD started: %.0f s counted from now" % CONFIG["hold_s"])
+                if not self.parked:
+                    self.parked = True
+                    self.say("INSIDE the zone for %.0f s: motors off" % CONFIG["zone_enter_s"])
         else:
-            if self.hold_start is not None:
-                self.say("LEFT the zone: hold timer reset")
-            self.inside_since = self.hold_start = None
-        return g["left"], g["right"]
+            self.inside_since = None
+            if self.parked:
+                self.parked = False
+                self.say("LEFT the zone: motors on")
+        if self.hold_start is not None and self.now - self.hold_start >= CONFIG["hold_s"]:
+            self.say("HOLD done: returning to point i")
+            self.state, self.near_since, self.inside_since, self.hold_start = "BACK", None, None, None
+            self.parked = False
+            self.compute()
+            g = self.g
+        return (0, 0) if self.parked else (g["left"], g["right"])
 
     def control(self):
         if self.finished:
@@ -495,7 +498,8 @@ class Mission(object):
             self.say("GPS back: resumed")
         elif not self.fresh:
             self.paused, self.state = self.state, "NO_GPS"
-            self.near_since = self.out_since = self.inside_since = self.hold_start = None
+            self.near_since = self.out_since = self.inside_since = None
+            self.parked = False
             self.say("GPS stale for over %.0f s: motors stopped until it returns" % CONFIG["gps_timeout_s"])
             return 0, 0
         if self.state in ("ROUTE", "HOLD", "BACK"):
@@ -504,6 +508,7 @@ class Mission(object):
                     self.out_since = self.now
                 if self.now - self.out_since >= CONFIG["out_time_s"]:
                     self.state, self.near_since, self.inside_since, self.hold_start = "RETURN", None, None, None
+                    self.parked = False
                     self.say("OUTSIDE the polygon by %.1f m for %.0f s: mission abandoned, returning to point A" % (
                         self.out, CONFIG["out_time_s"]))
                     self.compute()
@@ -511,7 +516,8 @@ class Mission(object):
                 self.out_since = None
         if self.state == "ROUTE" and self.g["dist"] <= CONFIG["zone_radius"]:
             self.state, self.inside_since = "HOLD", self.now
-            self.say("ENTERED the %.0f m zone: station keeping, cmd %d to %d" % (CONFIG["zone_radius"], CONFIG["hold_min"], CONFIG["hold_max"]))
+            self.say("ENTERED the %.0f m zone: station keeping, cmd %d to %d" % (
+                CONFIG["zone_radius"], CONFIG["hold_min"], CONFIG["hold_max"]))
             self.compute()
         if self.state == "HOLD":
             return self.hold()
@@ -538,7 +544,7 @@ class Mission(object):
         cmd = "(%3d,%3d)" % (left, right)
         if self.state in ("ROUTE", "HOLD", "BACK", "RETURN") and g is not None:
             text = "%-6s %s hdg=%5.1f tgt=%5.1f e=%+6.1f d=%5.1f o=%5.1f t=%2.0f %s g=%s n=%d" % (
-                self.state, self.target_name(), h, to_compass(g["desired"]), -math.degrees(g["err"]),
+                "PARK" if self.parked else self.state, self.target_name(), h, to_compass(g["desired"]), -math.degrees(g["err"]),
                 g["dist"], self.out, self.hold_time(), cmd, age, self.others.count)
         else:
             text = "%-7s hdg=%5.1f %s gps=%s n=%d" % (self.state, h, cmd, age, self.others.count)
@@ -637,7 +643,8 @@ def run(boat, keys, mission, log_path, kml_path):
                    None if desired is None else to_compass(desired), h,
                    None if err is None else -math.degrees(err), mission.speed, speed_cmd,
                    "+".join(key_name(k) for k in pressed), left, right, result,
-                   mission.others.count, mission.others.nearest(pos), mission.in_zone(), mission.hold_time()] + list(mag)
+                   mission.others.count, mission.others.nearest(pos), mission.in_zone(), mission.hold_time(),
+                   1 if mission.parked else 0] + list(mag)
             log.write(",".join("" if v is None else "%.3f" % v if isinstance(v, float) else str(v) for v in row) + "\n")
             if now - last_flush >= 5.0:
                 log.flush()
