@@ -7,6 +7,8 @@ import threading
 import time
 import types
 
+from server_connect import SERVER_IP, get_boats, send_position
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(ROOT, "data", "logs")
 STOP_FILE = os.path.join(ROOT, "data", "STOP")
@@ -14,10 +16,13 @@ ARDUINO_TTY = "/dev/ttyV0"
 MAX_CMD = 191
 ESC = "\x1b"
 EARTH = 6378137.0
-INSET = 20.0
+SERVER_PORT = 6800
+BOAT_ID = 4
+SEND_PERIOD = 1.0
 POINTS = {"A": (48.198863, -3.015070), "B": (48.199072, -3.016258), "C": (48.197408, -3.015060),
-          "D": (48.1970689, -3.017328), "E": (48.199707, -3.016404), "F": (48.199814, -3.015137)}
-ROUTE = ("a-", "C", "D", "b-", "E", "F", "a-", "A")
+          "D": (48.1970689, -3.017328), "E": (48.199707, -3.016404), "F": (48.199814, -3.015137),
+          "G": (48.198944, -3.015478), "G'": (48.199027, -3.015887)}
+ROUTE = ("G", "C", "D", "G'", "E", "F", "G", "A")
 CONFIG = {"speed": 120, "kp": 60.0, "turn_max": 90.0, "hz": 10.0, "arrival_radius": 2.0,
           "near_radius": 3.0, "near_time_s": 4.0, "point_intensity": 1.0, "segment_intensity": 2.0,
           "speed_gain": 6.0, "min_speed": 50, "gps_timeout_s": 3.0, "out_distance": 10.0,
@@ -58,14 +63,6 @@ def latlon(x, y):
 XY = dict((k, xy(*v)) for k, v in POINTS.items())
 
 
-def inset_points():
-    a, b = XY["A"], XY["B"]
-    n = math.hypot(a[0] - b[0], a[1] - b[1])
-    ux, uy = (a[0] - b[0]) / n, (a[1] - b[1]) / n
-    return (a[0] - INSET * ux, a[1] - INSET * uy), (b[0] + INSET * ux, b[1] + INSET * uy)
-
-
-XY["a-"], XY["b-"] = inset_points()
 POLYGON = [XY[k] for k in "ACDBEF"]
 
 
@@ -362,6 +359,7 @@ class Mission(object):
         self.pos = self.age = self.g = self.out = self.paused = self.start = None
         self.out_since = self.near_since = None
         self.end = "arrived"
+        self.boats = 0
 
     def say(self, text):
         print("\n" + text)
@@ -461,11 +459,11 @@ class Mission(object):
         age = "---" if self.age is None else "%.1f" % self.age
         cmd = "(%3d,%3d)" % (left, right)
         if self.state in ("ROUTE", "RETURN") and g is not None:
-            text = "%-6s %-2s hdg=%5.1f tgt=%5.1f err=%+6.1f d=%5.1f out=%5.1f cmd=%s gps=%s" % (
+            text = "%-6s %-2s hdg=%5.1f tgt=%5.1f err=%+6.1f d=%5.1f o=%5.1f %s gps=%s n=%d" % (
                 self.state, self.target_name(), h, to_compass(g["desired"]), -math.degrees(g["err"]),
-                g["dist"], self.out, cmd, age)
+                g["dist"], self.out, cmd, age, self.boats)
         else:
-            text = "%-7s hdg=%5.1f cmd=%s gps=%s" % (self.state, h, cmd, age)
+            text = "%-7s hdg=%5.1f %s gps=%s n=%d" % (self.state, h, cmd, age, self.boats)
         return text[:79].ljust(79)
 
 
@@ -487,7 +485,7 @@ def write_kml(path, track, raw, start):
                       for s in (("route", "ff00ff00", 4), ("raw", "ff0080ff", 2), ("guide", "ffffffff", 3),
                                 ("wall", "ff0000ff", 3)))
     items = [pt(k, POINTS[k], "a" if k == "A" else "b" if k == "B" else "edge") for k in "ABCDEF"]
-    items += [pt(k, latlon(*XY[k]), "mid") for k in ("a-", "b-")]
+    items += [pt(k, POINTS[k], "mid") for k in ("G", "G'")]
     items.append(ln([POINTS[k] for k in "ACDBEF"] + [POINTS["A"]], "wall"))
     if start is not None:
         items.append(ln([latlon(*start)] + [latlon(*XY[k]) for k in ROUTE], "guide"))
@@ -504,11 +502,13 @@ def write_kml(path, track, raw, start):
 
 def run(boat, keys, mission, log_path, kml_path):
     kf, track, raw, pos = Tracker(), [], [], None
-    period, reason, last_track, last_flush = 1.0 / CONFIG["hz"], None, -1.0, 0.0
+    period, reason, last_track, last_flush, next_send = 1.0 / CONFIG["hz"], None, -1.0, 0.0, None
     log = open(log_path, "w")
     log.write(",".join(COLUMNS) + "\n")
+    boats_log = open(log_path[:-4] + "_boats.csv", "w")
+    boats_log.write("t_s,id,lat,lon,cap_deg,age_s\n")
     try:
-        print("Route i, a-, C, D, b-, E, F, a-, A. Only q aborts. Ctrl+C exits.")
+        print("Route i, G, C, D, G', E, F, G, A. Only q aborts. Ctrl+C exits.")
         while True:
             started = boat.now()
             if os.path.isfile(STOP_FILE):
@@ -527,6 +527,17 @@ def run(boat, keys, mission, log_path, kml_path):
             if pos is not None and now - last_track >= 0.5:
                 track.append(latlon(*pos))
                 last_track = now
+            if pos is not None and (next_send is None or now >= next_send - period / 2.0):
+                next_send = SEND_PERIOD + (now if next_send is None or now - next_send > SEND_PERIOD else next_send)
+                lat, lon = latlon(*pos)
+                try:
+                    send_position(SERVER_IP, SERVER_PORT, BOAT_ID, lat, lon, h)
+                except Exception:
+                    pass
+                boats = get_boats()
+                mission.boats = len(boats)
+                for boat_id, b in sorted(boats.items()):
+                    boats_log.write("%.3f,%d,%.7f,%.7f,%.1f,%.1f\n" % (now, boat_id, b["lat"], b["lon"], b["cap"], b["age"]))
             last = boat.last_gps()
             mission.update(theta, now, pos, None if last is None else now - last[0])
             pressed = keys.read()
@@ -544,6 +555,7 @@ def run(boat, keys, mission, log_path, kml_path):
             log.write(",".join("" if v is None else "%.3f" % v if isinstance(v, float) else str(v) for v in row) + "\n")
             if now - last_flush >= 5.0:
                 log.flush()
+                boats_log.flush()
                 last_flush = now
             sys.stdout.write("\r" + mission.status(h, left, right))
             sys.stdout.flush()
@@ -557,6 +569,7 @@ def run(boat, keys, mission, log_path, kml_path):
         set_signals(signal.SIG_IGN)
         boat.stop()
         log.close()
+        boats_log.close()
         set_signals(signal.SIG_DFL)
         try:
             if pos is not None:
@@ -604,7 +617,6 @@ def main():
     while os.path.exists(os.path.join(LOG_DIR, "mission3_%03d.csv" % n)):
         n += 1
     base = os.path.join(LOG_DIR, "mission3_%03d" % n)
-    print("a-: %.7f,%.7f  b-: %.7f,%.7f" % (latlon(*XY["a-"]) + latlon(*XY["b-"])))
     try:
         run(boat, keys, Mission(), base + ".csv", base + ".kml")
     finally:
