@@ -7,7 +7,7 @@ import threading
 import time
 import types
 
-from server_connect import SERVER_IP, get_boats, send_position
+from ddboats_client import SERVER_IP, get_boats, send_position
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(ROOT, "data", "logs")
