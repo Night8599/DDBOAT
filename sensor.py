@@ -24,9 +24,6 @@ class Sensors:
         acc = self.imu.read_accel_raw()
         gyro = self.imu.read_gyro_raw()
         return mag, acc, gyro
-        
-        # Calibrar primeiro para depois pegar a direção correta
-        # self.heading = self.imu.heading_deg(mag[0], mag[1])
 
     def calibrate_imu(self, magx_min, magx_max, magy_min, magy_max):
         self.imu.fast_heading_calibration(magx_min, magx_max, magy_min, magy_max)
