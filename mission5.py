@@ -7,7 +7,7 @@ import threading
 import time
 import types
 
-from ddboats_client import SERVER_IP, get_boats, send_position
+from ddboats_client import get_boats, send_position
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(ROOT, "data", "logs")
@@ -15,7 +15,9 @@ STOP_FILE = os.path.join(ROOT, "data", "STOP")
 ARDUINO_TTY = "/dev/ttyV0"
 ESC = "\x1b"
 EARTH = 6378137.0
+SERVER_IP = "172.20.26.20"
 SERVER_PORT = 6800
+IDENT_FILE = os.path.join(ROOT, "data", "calib", "ident.json")
 BOAT_ID = 4
 SEND_PERIOD = 1.0
 OWN, DEST = "G'", "G"
@@ -27,12 +29,13 @@ CONFIG = {"speed": 100, "kp": 60.0, "turn_max": 90.0, "hz": 10.0, "arrival_radiu
           "gps_timeout_s": 3.0, "kf_acc_sigma": 0.3, "kf_gps_sigma": 2.0, "kf_gate": 9.21,
           "kf_reset_after": 5, "rep_radius": 20.0, "rep_intensity": 6700.0, "rep_min_dist": 1.0,
           "rep_turn_deg": 45.0, "boat_max_age_s": 5.0, "zone_radius": 5.0, "min_cmd": 50, "cmd_gain": 50.0,
-          "other_id": 7, "release_radius": 10.0, "release_reads": 5, "align_tol": 25.0,
-          "rot_cmd": 60, "rot_deadband": 7.0, "follow": 1}
+          "other_id": 7, "release_radius": 10.0, "release_reads": 5, "follow": 1, "predict": 1, "pred_max_s": 4.0, "pred_gain": 0.5, "lane_m": 10.0, "return_delay_s": 10.0, "linger_s": 20.0, "panic_m": 5.0, "panic_exit_m": 8.0, "panic_turn_deg": 45.0,
+          "tau_cl": 1.0, "tau_d": 0.5, "tau_fuse": 2.0, "trim100": 0.0, "trim60": 0.0, "gyro_scale": 0.0,
+          "gyro_bias": 0.0, "yaw_gain": 0.0}
 COLUMNS = ["t_s", "state", "lat", "lon", "gps_age_s", "gps_new", "x_m", "y_m", "vx_mps", "vy_mps",
            "target", "dist_m", "target_deg", "heading_deg", "error_deg", "speed", "speed_cmd",
-           "key", "cmd_left", "cmd_right", "kf", "rep_n", "rep_min_m", "in_zone", "streak", "cap_err_deg",
-           "other_dest_m", "rot", "mag_x", "mag_y", "mag_z"]
+           "key", "cmd_left", "cmd_right", "kf", "rep_n", "rep_min_m", "in_zone", "streak",
+           "other_dest_m", "h_comp_deg", "rate_dps", "trim_u", "panic", "mag_x", "mag_y", "mag_z"]
 LAT0, LON0 = math.radians(POINTS["B"][0]), math.radians(POINTS["B"][1])
 
 
@@ -65,13 +68,16 @@ def latlon(x, y):
 XY = dict((k, xy(*v)) for k, v in POINTS.items())
 
 
-def gradient(p, start, target):
+def gradient(p, start, target, point=None):
+    point = target if point is None else point
     dx, dy = target[0] - start[0], target[1] - start[1]
     t = max(0.0, min(1.0, ((p[0] - start[0]) * dx + (p[1] - start[1]) * dy) / max(dx * dx + dy * dy, 1e-9)))
     ip, sg = CONFIG["point_intensity"], CONFIG["segment_intensity"]
     cx, cy = start[0] + t * dx, start[1] + t * dy
-    return (-2.0 * (p[0] - target[0]) * ip - 2.0 * (p[0] - cx) * sg,
-            -2.0 * (p[1] - target[1]) * ip - 2.0 * (p[1] - cy) * sg)
+    return (-2.0 * (p[0] - point[0]) * ip - 2.0 * (p[0] - cx) * sg,
+            -2.0 * (p[1] - point[1]) * ip - 2.0 * (p[1] - cy) * sg)
+
+
 
 
 
@@ -84,27 +90,54 @@ class OtherBoats(object):
         self.positions = []
         self.fresh = {}
         self.last_seen = {}
+        self.hist = {}
 
     @property
     def count(self):
         return len(self.positions)
 
-    def update(self, boats):
+    def velocity(self, boat_id, t_pos, p):
+        h = self.hist.setdefault(boat_id, [])
+        if not h or t_pos > h[-1][0] + 0.5:
+            h.append((t_pos, p[0], p[1]))
+            del h[:-5]
+        if len(h) < 3:
+            return 0.0, 0.0
+        t = [r[0] for r in h]
+        tm = sum(t) / len(t)
+        stt = sum((x - tm) ** 2 for x in t)
+        if stt < 1e-6:
+            return 0.0, 0.0
+        ve = sum((r[0] - tm) * r[1] for r in h) / stt
+        vn = sum((r[0] - tm) * r[2] for r in h) / stt
+        speed = math.hypot(ve, vn)
+        return (ve, vn) if speed <= 1.5 else (ve * 1.5 / speed, vn * 1.5 / speed)
+
+    def update(self, boats, now):
         self.positions = []
         self.fresh = {}
         for boat_id, b in boats.items():
             if boat_id == BOAT_ID:
                 continue
             self.last_seen[boat_id] = (b["lat"], b["lon"])
-            if b["age"] <= CONFIG["boat_max_age_s"]:
-                p = xy(b["lat"], b["lon"])
-                self.positions.append(p)
-                self.fresh[boat_id] = (p, b["cap"])
+            if b["age"] > CONFIG["boat_max_age_s"]:
+                continue
+            p = xy(b["lat"], b["lon"])
+            lead = 0.0
+            if CONFIG["predict"]:
+                v = self.velocity(boat_id, now - b["age"], p)
+                lead = CONFIG["pred_gain"] * min(b["age"], CONFIG["pred_max_s"])
+                p = (p[0] + v[0] * lead, p[1] + v[1] * lead)
+            self.positions.append(p)
+            self.fresh[boat_id] = (p, b["cap"])
 
     def nearest(self, p):
         if p is None or not self.positions:
             return None
         return min(math.hypot(p[0] - q[0], p[1] - q[1]) for q in self.positions)
+
+    def closest(self, p):
+        return min(self.positions, key=lambda q: math.hypot(p[0] - q[0], p[1] - q[1]))
 
     def repulsion(self, p):
         rx = ry = 0.0
@@ -122,12 +155,19 @@ class OtherBoats(object):
         return rx, ry
 
 
-def guidance(p, theta, start, target, rep, cmd):
-    gx, gy = gradient(p, start, target)
+def trim_turn(cmd):
+    t100, t60 = CONFIG["trim100"], CONFIG["trim60"]
+    right = t60 + (t100 - t60) * (cmd - 60.0) / 40.0 if cmd >= 60 else t60 * cmd / 60.0
+    return -right / 2.0
+
+
+def guidance(p, theta, start, target, rep, cmd, omega=0.0, point=None):
+    gx, gy = gradient(p, start, target, point)
     desired = math.atan2(gy + rep[1], gx + rep[0])
     err = wrap(desired - theta)
     lim = min(CONFIG["turn_max"], float(cmd))
-    left, right = mix(cmd, max(-lim, min(lim, CONFIG["kp"] * err)))
+    turn = CONFIG["kp"] * err - CONFIG["kp"] * CONFIG["tau_d"] * omega + trim_turn(cmd)
+    left, right = mix(cmd, max(-lim, min(lim, turn)))
     return {"dist": math.hypot(target[0] - p[0], target[1] - p[1]), "desired": desired, "err": err,
             "cmd": cmd, "left": left, "right": right}
 
@@ -180,8 +220,13 @@ class Tracker(object):
         return "ok"
 
 
+
 def compass_heading(m, c):
-    a = math.degrees(math.atan2((m[1] - c["offy"]) * c["sy"], (m[0] - c["offx"]) * c["sx"]))
+    if c.get("format") == 2:
+        x, y = m[0] - c["cx"], m[1] - c["cy"]
+        a = math.degrees(math.atan2(c["m10"] * x + c["m11"] * y, c["m00"] * x + c["m01"] * y))
+    else:
+        a = math.degrees(math.atan2((m[1] - c["offy"]) * c["sy"], (m[0] - c["offx"]) * c["sx"]))
     return (c["sign"] * ((a - c["north"] + 180.0) % 360.0 - 180.0)) % 360.0
 
 
@@ -191,6 +236,7 @@ def load_calibration():
             with open(path) as f:
                 return json.load(f)
     sys.exit("compass calibration file not found: data/calib/mag2d.json")
+
 
 
 def load_drivers():
@@ -246,6 +292,7 @@ class Gps(threading.Thread):
             return fix
 
 
+
 class Boat(object):
     def __init__(self):
         self.t0 = time.time()
@@ -265,6 +312,15 @@ class Boat(object):
         self.arduino = arduino_driver_v2.ArduinoIO()
         if self.arduino.arduino is None:
             sys.exit("Arduino not initialized")
+        self.hf = self.last_t = None
+        self.rate = 0.0
+        self.bias = 0.0
+        if CONFIG["gyro_scale"]:
+            samples = []
+            for _ in range(25):
+                samples.append(self.imu.read_gyro_raw()[2])
+                time.sleep(0.08)
+            self.bias = sum(samples) / len(samples)
 
     def now(self):
         return time.time() - self.t0
@@ -279,8 +335,21 @@ class Boat(object):
             samples.append(self.imu.read_mag_raw())
             time.sleep(0.01)
         mag = [sorted(v[i] for v in samples)[1] for i in range(3)]
-        h = compass_heading(mag, self.calibration)
-        return to_theta(h), h, mag
+        hc = compass_heading(mag, self.calibration)
+        h = hc
+        if CONFIG["gyro_scale"]:
+            now = self.now()
+            raw = CONFIG["gyro_scale"] * (self.imu.read_gyro_raw()[2] - self.bias)
+            self.rate = 0.7 * self.rate + 0.3 * raw
+            dt = 0.0 if self.last_t is None else now - self.last_t
+            self.last_t = now
+            if self.hf is None or dt <= 0.0 or dt > 1.0:
+                self.hf = hc
+            else:
+                pred = self.hf + self.rate * dt
+                self.hf = (pred + (dt / CONFIG["tau_fuse"]) * wrap_deg(hc - pred)) % 360.0
+            h = self.hf
+        return to_theta(h), h, mag, self.rate, hc
 
     def pop_gps(self):
         return self.gps.pop()
@@ -298,6 +367,7 @@ class Boat(object):
             except Exception:
                 pass
             time.sleep(0.05)
+
 
 
 class Stop(Exception):
@@ -376,17 +446,19 @@ class Keys(object):
 
 
 
+
 class Mission(object):
     def __init__(self):
         self.state = "WAITING"
         self.finished = self.fresh = False
-        self.theta = self.now = 0.0
-        self.streak = self.rot = 0
-        self.align = None
+        self.theta = self.now = self.omega = 0.0
+        self.streak = 0
         self.armed = False
         self.gap = 0.0
+        self.panic = False
+        self.both_t = None
         self.pos = self.age = self.g = self.paused = self.start = self.near_since = None
-        self.cap_err = self.other_dest = None
+        self.other_dest = None
         self.end = "arrived"
         self.others = OtherBoats()
 
@@ -399,14 +471,17 @@ class Mission(object):
     def leg_points(self):
         mode = self.mode()
         if mode == "RETURN":
-            return XY["B"], XY["A"]
+            return XY["B"], XY["A"], XY["A"]
         if mode == "CROSS":
-            return XY[OWN], XY[DEST]
+            dx, dy = XY[DEST][0] - XY[OWN][0], XY[DEST][1] - XY[OWN][1]
+            n = math.hypot(dx, dy)
+            ox, oy = CONFIG["lane_m"] * dy / n, -CONFIG["lane_m"] * dx / n
+            return (XY[OWN][0] + ox, XY[OWN][1] + oy), (XY[DEST][0] + ox, XY[DEST][1] + oy), XY[DEST]
         if mode == "STAY":
-            return XY[DEST], XY[DEST]
+            return XY[DEST], XY[DEST], XY[DEST]
         if mode == "HOLD":
-            return XY[OWN], XY[OWN]
-        return self.start, XY[OWN]
+            return XY[OWN], XY[OWN], XY[OWN]
+        return self.start, XY[OWN], XY[OWN]
 
     def target_name(self):
         return {"GO": OWN, "HOLD": OWN, "CROSS": DEST, "STAY": DEST, "RETURN": "A"}.get(self.mode(), "")
@@ -419,34 +494,45 @@ class Mission(object):
     def compute(self):
         self.g = None
         if self.fresh and self.start is not None:
-            start, target = self.leg_points()
-            distance = math.hypot(target[0] - self.pos[0], target[1] - self.pos[1])
+            start, target, point = self.leg_points()
+            distance = math.hypot(point[0] - self.pos[0], point[1] - self.pos[1])
             cmd = int(round(max(float(CONFIG["min_cmd"]), min(float(CONFIG["speed"]), CONFIG["cmd_gain"] * distance))))
-            self.g = guidance(self.pos, self.theta, start, target, self.others.repulsion(self.pos), cmd)
+            self.g = guidance(self.pos, self.theta, start, target, self.others.repulsion(self.pos), cmd, self.omega, point)
+            d = self.others.nearest(self.pos)
+            if d is not None and d < CONFIG["panic_m"]:
+                self.panic = True
+            elif self.panic and (d is None or d > CONFIG["panic_exit_m"]):
+                self.panic = False
+            if self.panic and d is not None:
+                q = self.others.closest(self.pos)
+                away = math.atan2(self.pos[1] - q[1], self.pos[0] - q[0]) + math.radians(CONFIG["panic_turn_deg"])
+                err = wrap(away - self.theta)
+                lim = float(CONFIG["speed"])
+                turn = CONFIG["kp"] * err - CONFIG["kp"] * CONFIG["tau_d"] * self.omega
+                left, right = mix(CONFIG["speed"], max(-lim, min(lim, turn)))
+                self.g.update({"desired": away, "err": err, "cmd": CONFIG["speed"], "left": left, "right": right})
 
-    def update(self, theta, now, pos, age):
-        self.theta, self.now, self.pos, self.age = theta, now, pos, age
+    def update(self, theta, now, pos, age, omega=0.0):
+        self.theta, self.now, self.pos, self.age, self.omega = theta, now, pos, age, omega
         self.fresh = pos is not None and age is not None and age <= CONFIG["gps_timeout_s"]
         self.compute()
 
-    def reading(self, heading_deg):
+    def reading(self):
         other = self.others.fresh.get(CONFIG["other_id"])
         mode = self.mode()
         ok = False
-        self.cap_err = self.other_dest = None
+        self.other_dest = None
         self.gap = 0.0
-        if other is not None and self.fresh and mode in ("HOLD", "CROSS", "STAY"):
-            mine, theirs = (XY[OWN], XY[DEST]) if mode == "HOLD" else (XY[DEST], XY[OWN])
+        if other is not None and self.fresh and mode in ("GO", "HOLD", "CROSS", "STAY"):
+            mine, theirs = (XY[OWN], XY[DEST]) if mode in ("GO", "HOLD") else (XY[DEST], XY[OWN])
             self.other_dest = math.hypot(other[0][0] - theirs[0], other[0][1] - theirs[1])
-            self.cap_err = wrap_deg(heading_deg - other[1] - 180.0)
-            near = (math.hypot(self.pos[0] - mine[0], self.pos[1] - mine[1]) <= CONFIG["release_radius"]
-                    and self.other_dest <= CONFIG["release_radius"])
-            ok = near and (mode != "HOLD" or abs(self.cap_err) <= CONFIG["align_tol"])
+            ok = (mode != "GO" and math.hypot(self.pos[0] - mine[0], self.pos[1] - mine[1]) <= CONFIG["release_radius"]
+                  and self.other_dest <= CONFIG["release_radius"])
+            if mode in ("GO", "HOLD"):
+                self.armed = self.armed or self.other_dest <= CONFIG["release_radius"]
+                self.gap = (math.hypot(XY[DEST][0] - XY[OWN][0], XY[DEST][1] - XY[OWN][1])
+                            - math.hypot(other[0][0] - XY[OWN][0], other[0][1] - XY[OWN][1]))
         self.streak = self.streak + 1 if ok else 0
-        if other is not None and self.fresh and mode == "HOLD":
-            self.armed = self.armed or self.other_dest <= CONFIG["release_radius"]
-            self.gap = (math.hypot(XY[DEST][0] - XY[OWN][0], XY[DEST][1] - XY[OWN][1])
-                        - math.hypot(other[0][0] - XY[OWN][0], other[0][1] - XY[OWN][1]))
 
     def abort(self, text):
         self.state, self.finished, self.end = "STOPPED", True, "aborted"
@@ -464,21 +550,7 @@ class Mission(object):
         self.state = "STOPPED"
         return 0, 0
 
-    def hold(self):
-        g = self.g
-        if g["dist"] > CONFIG["zone_radius"]:
-            return g["left"], g["right"]
-        bearing = math.atan2(XY[DEST][1] - self.pos[1], XY[DEST][0] - self.pos[0])
-        err = wrap(bearing - self.theta)
-        self.align = (bearing, err)
-        if abs(math.degrees(err)) <= CONFIG["rot_deadband"]:
-            return 0, 0
-        self.rot = 1
-        return (0, CONFIG["rot_cmd"]) if err > 0 else (CONFIG["rot_cmd"], 0)
-
     def control(self):
-        self.rot = 0
-        self.align = None
         if self.finished:
             return 0, 0
         if self.state == "WAITING":
@@ -499,28 +571,29 @@ class Mission(object):
             return 0, 0
         if self.state == "GO" and self.g["dist"] <= CONFIG["zone_radius"]:
             self.state = "HOLD"
-            self.say("ENTERED the %.0f m zone of %s: aligning toward %s, waiting for boat %d" % (
-                CONFIG["zone_radius"], OWN, DEST, CONFIG["other_id"]))
+            self.say("ENTERED the %.0f m zone of %s: station keeping, waiting for boat %d" % (
+                CONFIG["zone_radius"], OWN, CONFIG["other_id"]))
             self.compute()
         left_first = CONFIG["follow"] and self.armed and self.gap > CONFIG["release_radius"]
         if self.state == "HOLD" and (self.streak >= CONFIG["release_reads"] or left_first):
             self.state, self.streak = "CROSS", 0
             self.say("RELEASED (%s): crossing to %s" % (
-                "boat %d already left" % CONFIG["other_id"] if left_first else "%d reads within %.0f m, caps opposed" % (
+                "boat %d already left" % CONFIG["other_id"] if left_first else "%d reads within %.0f m" % (
                     CONFIG["release_reads"], CONFIG["release_radius"]), DEST))
             self.compute()
         if self.state == "CROSS" and self.g["dist"] <= CONFIG["zone_radius"]:
             self.state = "STAY"
             self.say("ENTERED the %.0f m zone of %s: station keeping" % (CONFIG["zone_radius"], DEST))
             self.compute()
-        if self.state in ("CROSS", "STAY") and self.streak >= CONFIG["release_reads"]:
+        if self.state in ("CROSS", "STAY") and self.streak >= CONFIG["release_reads"] and self.both_t is None:
+            self.both_t = self.now
+            self.say("BOTH ARRIVED (%d reads within %.0f m): waiting %.0f s so the other boat can confirm, then A" % (
+                CONFIG["release_reads"], CONFIG["release_radius"], CONFIG["return_delay_s"]))
+        if self.both_t is not None and self.state in ("CROSS", "STAY") and self.now - self.both_t >= CONFIG["return_delay_s"]:
             self.state, self.streak, self.near_since = "RETURN", 0, None
-            self.say("BOTH ARRIVED (%d reads within %.0f m): returning to point A" % (
-                CONFIG["release_reads"], CONFIG["release_radius"]))
+            self.say("returning to point A")
             self.compute()
         g = self.g
-        if self.state == "HOLD":
-            return self.hold()
         if self.state != "RETURN":
             return g["left"], g["right"]
         if g["dist"] > CONFIG["near_radius"]:
@@ -535,23 +608,20 @@ class Mission(object):
     def targets(self):
         if self.g is None:
             return None, None, None
-        if self.align is not None:
-            return self.align[0], self.align[1], self.g["cmd"]
         return self.g["desired"], self.g["err"], self.g["cmd"]
 
     def status(self, h, left, right):
         g = self.g
         age = "---" if self.age is None else "%.1f" % self.age
         cmd = "(%3d,%3d)" % (left, right)
-        ce = "---" if self.cap_err is None else "%+.0f" % self.cap_err
         if self.state in ("GO", "HOLD", "CROSS", "STAY", "RETURN") and g is not None:
-            desired, err, _ = self.targets()
-            text = "%-6s %-2s hdg=%5.1f tgt=%5.1f e=%+6.1f d=%5.1f k=%d ce=%s %s g=%s n=%d" % (
-                "ROT" if self.rot else self.state, self.target_name(), h, to_compass(desired), -math.degrees(err),
-                g["dist"], self.streak, ce, cmd, age, self.others.count)
+            text = "%-6s %-2s hdg=%5.1f tgt=%5.1f e=%+6.1f d=%5.1f k=%d %s g=%s n=%d" % (
+                self.state, self.target_name(), h, to_compass(g["desired"]), -math.degrees(g["err"]),
+                g["dist"], self.streak, cmd, age, self.others.count)
         else:
             text = "%-7s hdg=%5.1f %s gps=%s n=%d" % (self.state, h, cmd, age, self.others.count)
         return text[:79].ljust(79)
+
 
 
 def write_kml(path, track, raw, start, others):
@@ -581,6 +651,10 @@ def write_kml(path, track, raw, start, others):
     items += [ln(circle(OWN), "zone"), ln(circle(DEST), "zone")]
     items.append(ln([POINTS[k] for k in "ACDBEF"] + [POINTS["A"]], "wall"))
     items.append(ln([POINTS[OWN], POINTS[DEST]], "guide"))
+    dx, dy = XY[DEST][0] - XY[OWN][0], XY[DEST][1] - XY[OWN][1]
+    n = math.hypot(dx, dy)
+    ox, oy = CONFIG["lane_m"] * dy / n, -CONFIG["lane_m"] * dx / n
+    items.append(ln([latlon(XY[OWN][0] + ox, XY[OWN][1] + oy), latlon(XY[DEST][0] + ox, XY[DEST][1] + oy)], "guide"))
     if start is not None:
         items.append(ln([latlon(*start), POINTS[OWN]], "guide"))
     if len(track) > 1:
@@ -595,22 +669,24 @@ def write_kml(path, track, raw, start, others):
                 "%s%s</Document></kml>\n" % (styles, "".join(items)))
 
 
+
 def run(boat, keys, mission, log_path, kml_path):
     kf, track, raw, pos = Tracker(), [], [], None
     period, reason, last_track, last_flush, next_send = 1.0 / CONFIG["hz"], None, -1.0, 0.0, None
+    finish_t = None
     log = open(log_path, "w")
     log.write(",".join(COLUMNS) + "\n")
     boats_log = open(log_path[:-4] + "_boats.csv", "w")
     boats_log.write("t_s,id,lat,lon,cap_deg,age_s\n")
     try:
-        print("Go to %s, align toward %s, cross when boat %d is ready, return to A. Only q aborts. Ctrl+C exits." % (
+        print("Go to %s, hold, cross to %s when boat %d is there, return to A. Only q aborts. Ctrl+C exits." % (
             OWN, DEST, CONFIG["other_id"]))
         while True:
             started = boat.now()
             if os.path.isfile(STOP_FILE):
                 reason = "STOP file"
                 break
-            theta, h, mag = boat.heading()
+            theta, h, mag, rate, hc = boat.heading()
             now = boat.now()
             fix = boat.pop_gps()
             kf.predict(now)
@@ -635,14 +711,14 @@ def run(boat, keys, mission, log_path, kml_path):
                     boats = get_boats()
                 except Exception:
                     boats = {}
-                mission.others.update(boats)
+                mission.others.update(boats, now)
                 cycle = True
                 for boat_id, b in sorted(boats.items()):
                     boats_log.write("%.3f,%d,%.7f,%.7f,%.1f,%.1f\n" % (now, boat_id, b["lat"], b["lon"], b["cap"], b["age"]))
             last = boat.last_gps()
-            mission.update(theta, now, pos, None if last is None else now - last[0])
+            mission.update(theta, now, pos, None if last is None else now - last[0], -math.radians(rate))
             if cycle:
-                mission.reading(h)
+                mission.reading()
             pressed = keys.read()
             for k in pressed:
                 mission.on_key(k)
@@ -656,7 +732,7 @@ def run(boat, keys, mission, log_path, kml_path):
                    None if err is None else -math.degrees(err), CONFIG["speed"], speed_cmd,
                    "+".join(key_name(k) for k in pressed), left, right, result,
                    mission.others.count, mission.others.nearest(pos), mission.in_zone(), mission.streak,
-                   mission.cap_err, mission.other_dest, mission.rot] + list(mag)
+                   mission.other_dest, hc, rate, None if speed_cmd is None else trim_turn(speed_cmd), 1 if mission.panic else 0] + list(mag)
             log.write(",".join("" if v is None else "%.3f" % v if isinstance(v, float) else str(v) for v in row) + "\n")
             if now - last_flush >= 5.0:
                 log.flush()
@@ -666,7 +742,10 @@ def run(boat, keys, mission, log_path, kml_path):
             sys.stdout.flush()
             if mission.finished:
                 reason = mission.end
-                break
+                if finish_t is None:
+                    finish_t = now
+                if reason == "aborted" or now - finish_t >= CONFIG["linger_s"]:
+                    break
             boat.sleep(period - (boat.now() - started))
     except Stop as e:
         reason = "interrupted (%s)" % e
@@ -686,7 +765,23 @@ def run(boat, keys, mission, log_path, kml_path):
     print("\nEnd: %s. Motors stopped. Log: %s" % (reason, log_path))
 
 
+
+
+def load_ident():
+    if not os.path.isfile(IDENT_FILE):
+        return None
+    with open(IDENT_FILE) as f:
+        return json.load(f)
+
+
 def main():
+    ident = load_ident()
+    if ident:
+        CONFIG["gyro_scale"] = ident["gyro_scale_dps_per_count"]
+        if ident["yaw_gain_dps_per_unit"] > 0.02:
+            CONFIG["kp"] = max(60.0, min(400.0, 1.0 / (CONFIG["tau_cl"] * 2.0 * math.radians(ident["yaw_gain_dps_per_unit"]))))
+        CONFIG["trim100"] = ident["trim_u_right_100"]
+        CONFIG["trim60"] = ident["trim_u_right_60"] if ident["trim_u_right_60"] is not None else 0.6 * ident["trim_u_right_100"]
     args = sys.argv[1:]
     if len(args) % 2:
         sys.exit("unknown option or missing value: %s (usage: python3 mission5.py [--option value ...])" % args[-1])
@@ -702,6 +797,11 @@ def main():
     users = port_users(ARDUINO_TTY)
     if users:
         sys.exit("%s is in use by another process (motors would shake): %s" % (ARDUINO_TTY, "; ".join(users)))
+    if ident:
+        print("ident.json: gyro %.4f deg/s per count, kp %.0f, trim %+.1f at 100 and %+.1f at 60" % (
+            CONFIG["gyro_scale"], CONFIG["kp"], CONFIG["trim100"], CONFIG["trim60"]))
+    else:
+        print("WARNING: data/calib/ident.json not found: compass only, default gains, no trim.")
     boat = Boat()
     set_signals(on_signal)
     boat.stop()
