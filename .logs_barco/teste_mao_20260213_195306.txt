@@ -1,0 +1,48 @@
+Teste na mao - 2026-02-13 20:00:17
+Interrompido: SIM
+Contagem: AVS=2, ERR=1, INFO=14, OK=17
+
+== Ambiente
+  [OK    ] python             3.5.3
+  [INFO  ] config             /home/ue32/DDBOAT/config/boat04.json
+  [INFO  ] git                commit e2e944a, 0 arquivo(s) modificado(s)
+  [OK    ] relogio            2026-02-13 19:53:06
+  [OK    ] disco              1316 MB livres
+  [OK    ] data/              escrita em data/logs
+== Arranque
+  [OK    ] drivers            importados de src/DriversDDBOAT_2026
+  [OK    ] imu                mag=[3574, -4294, 9238] acc=[512, 100, -3992] gyr=[13, -37, -1]
+  [OK    ] gps                thread iniciada
+  [OK    ] arduino            status: 'n_auto: 1, n_rc: 0, state: 1, t0: 0, t1: 0\r'
+  [INFO  ] watchdog           1.0 s
+== IMU parada
+  [INFO  ] taxa read_imu      19.2 Hz com mediana de 5
+  [OK    ] acc |g|            4032 LSB (1 g ~ 4096 em +-8 g)
+  [INFO  ] inclinacao IMU     9.5 graus entre a vertical e o eixo -z da IMU
+  [OK    ] giro bias          [8.6, -36.7, 7.3] LSB, desvio [18.3, 2.5, 7.0] LSB
+  [INFO  ] deriva sem correcao 27.5 graus/min no rumo
+  [INFO  ] mag                media [1627, -4827, 7907], |m| = 9407, ruido (desvio) [18.4, 20.3, 23.7] LSB
+  [INFO  ] ODR medido         mag ~10 Hz, acc ~240 Hz (leitura crua a 240 Hz)
+== Picos de 256 / BDU
+  [INFO  ] BDU desligado      87 picos em 803 leituras {'gyr_z': 30, 'gyr_x': 50, 'acc_y': 1, 'acc_x': 6}
+  [INFO  ] BDU ligado         0 picos em 808 leituras {}
+  [OK    ] BDU                elimina os picos
+== Eixos da IMU
+  [OK    ] lado esquerdo      inclinacao medida 21.2 graus para a esquerda
+  [INFO  ] eixos              frente = -x IMU (0.99); esquerda = +y IMU (1.00); cima = -z IMU (0.99)
+  [INFO  ] proa levantada     15.7 graus
+  [OK    ] axes.json          salvo em data/calib/axes.json
+== Calibracao mag2d
+  [OK    ] amplitudes         x = 3623, y = 2900 (razao 0.80, ideal ~1)
+  [INFO  ] hard iron          centro (3370, -4402) LSB
+  [OK    ] norte->leste       -100.9 graus, sign = -1
+  [OK    ] mag2d.json         salvo em data/calib/mag2d.json
+== Validacao do rumo x celular
+  [AVS   ] rumo LESTE         biblioteca 101.2, celular 90.0, erro +11.2 graus
+  [AVS   ] rumo SUL           biblioteca 164.1, celular 180.0, erro -15.9 graus
+  [ERR   ] rumo OESTE         biblioteca 167.4, celular 270.0, erro -102.6 graus
+  [OK    ] rumo NORTE         biblioteca 353.3, celular 0.0, erro -6.7 graus
+  [INFO  ] erro medio         -28.5 graus (vies), max |erro| 102.6
+
+== Recomendacoes (nada foi alterado no config)
+  - real.imu.bdu = true (picos 87 -> 0)

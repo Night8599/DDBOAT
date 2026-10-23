@@ -1,0 +1,354 @@
+{
+  "medidas": {
+    "Calibracao mag2d": {
+      "mag2d": {
+        "offx": 3369.5,
+        "offy": -4402.0,
+        "sign": -1,
+        "sy": 0.000689655172413793,
+        "north": 177.75674855981072,
+        "sx": 0.0005520287054926856
+      },
+      "compass_north": "verdadeiro"
+    },
+    "IMU parada": {
+      "mag_mean": [
+        1627.96875,
+        -4827.098958333333,
+        7907.989583333333
+      ],
+      "acc_mean": [
+        660.9010416666666,
+        81.36979166666667,
+        -3976.2447916666665
+      ],
+      "gyro_cal": {
+        "gyro_std_lsb": [
+          18.294169817336773,
+          2.463266369395975,
+          7.016471738063346
+        ],
+        "gyro_bias_lsb": [
+          8.645833333333334,
+          -36.661458333333336,
+          7.328125
+        ],
+        "up_unit_imu": [
+          0.1639295293873569,
+          0.02018291818791168,
+          -0.986265562213474
+        ]
+      },
+      "read_imu_hz": 19.2,
+      "mag_std": [
+        18.443298876217888,
+        20.342013148037488,
+        23.69467010728479
+      ],
+      "tilt_rest_deg": 9.50695406908524,
+      "odr": {
+        "mag_hz": 10.0,
+        "acc_hz": 240.0,
+        "read_hz": 240.5
+      }
+    },
+    "Validacao do rumo x celular": {
+      "LESTE": {
+        "lib": 101.16304473834452,
+        "celular": 90.0,
+        "erro": 11.163044738344524
+      },
+      "SUL": {
+        "lib": 164.11407112964025,
+        "celular": 180.0,
+        "erro": -15.885928870359749
+      },
+      "OESTE": {
+        "lib": 167.36400004245175,
+        "celular": 270.0,
+        "erro": -102.63599995754825
+      },
+      "NORTE": {
+        "lib": 353.27881449380834,
+        "celular": 0.0,
+        "erro": -6.721185506191659
+      }
+    },
+    "Eixos da IMU": {
+      "R": [
+        [
+          -0.9913968683587475,
+          0.013936977348490812,
+          -0.13014611047148533
+        ],
+        [
+          0.011612062518668668,
+          0.9997594645927999,
+          0.018605723882202246
+        ],
+        [
+          0.1303741132761061,
+          0.016934391619006416,
+          -0.9913202393616117
+        ]
+      ]
+    },
+    "Ambiente": {
+      "real.motors.cmd_max": 191,
+      "real.motors.allow_reverse": false,
+      "python": "3.5.3 (default, Sep 27 2018, 17:25:39) \n[GCC 6.3.0 20170516]",
+      "control.heading.kp": 60.0,
+      "real.imu.median_n": 5,
+      "calib.mag2d_rotation_s": 20,
+      "real.drivers_dir": "src/DriversDDBOAT_2026",
+      "nav.heading_source": "mag2d",
+      "real.gps.mode": "driver",
+      "real.turn_sign": 1,
+      "loop.hz": 10
+    },
+    "Picos de 256 / BDU": {
+      "bdu": {
+        "bdu": {
+          "picos": {
+            "acc_z": 0,
+            "mag_x": 0,
+            "mag_y": 0,
+            "acc_y": 0,
+            "gyr_y": 0,
+            "gyr_x": 0,
+            "gyr_z": 0,
+            "mag_z": 0,
+            "acc_x": 0
+          },
+          "total": 0,
+          "leituras": 808
+        },
+        "sem_bdu": {
+          "picos": {
+            "acc_z": 0,
+            "mag_x": 0,
+            "mag_y": 0,
+            "acc_y": 1,
+            "gyr_y": 0,
+            "gyr_x": 50,
+            "gyr_z": 30,
+            "mag_z": 0,
+            "acc_x": 6
+          },
+          "total": 87,
+          "leituras": 803
+        }
+      }
+    }
+  },
+  "recomendacoes": [
+    "real.imu.bdu = true (picos 87 -> 0)"
+  ],
+  "itens": [
+    {
+      "status": "OK",
+      "msg": "3.5.3",
+      "secao": "Ambiente",
+      "item": "python"
+    },
+    {
+      "status": "INFO",
+      "msg": "/home/ue32/DDBOAT/config/boat04.json",
+      "secao": "Ambiente",
+      "item": "config"
+    },
+    {
+      "status": "INFO",
+      "msg": "commit e2e944a, 0 arquivo(s) modificado(s)",
+      "secao": "Ambiente",
+      "item": "git"
+    },
+    {
+      "status": "OK",
+      "msg": "2026-02-13 19:53:06",
+      "secao": "Ambiente",
+      "item": "relogio"
+    },
+    {
+      "status": "OK",
+      "msg": "1316 MB livres",
+      "secao": "Ambiente",
+      "item": "disco"
+    },
+    {
+      "status": "OK",
+      "msg": "escrita em data/logs",
+      "secao": "Ambiente",
+      "item": "data/"
+    },
+    {
+      "status": "OK",
+      "msg": "importados de src/DriversDDBOAT_2026",
+      "secao": "Arranque",
+      "item": "drivers"
+    },
+    {
+      "status": "OK",
+      "msg": "mag=[3574, -4294, 9238] acc=[512, 100, -3992] gyr=[13, -37, -1]",
+      "secao": "Arranque",
+      "item": "imu"
+    },
+    {
+      "status": "OK",
+      "msg": "thread iniciada",
+      "secao": "Arranque",
+      "item": "gps"
+    },
+    {
+      "status": "OK",
+      "msg": "status: 'n_auto: 1, n_rc: 0, state: 1, t0: 0, t1: 0\\r'",
+      "secao": "Arranque",
+      "item": "arduino"
+    },
+    {
+      "status": "INFO",
+      "msg": "1.0 s",
+      "secao": "Arranque",
+      "item": "watchdog"
+    },
+    {
+      "status": "INFO",
+      "msg": "19.2 Hz com mediana de 5",
+      "secao": "IMU parada",
+      "item": "taxa read_imu"
+    },
+    {
+      "status": "OK",
+      "msg": "4032 LSB (1 g ~ 4096 em +-8 g)",
+      "secao": "IMU parada",
+      "item": "acc |g|"
+    },
+    {
+      "status": "INFO",
+      "msg": "9.5 graus entre a vertical e o eixo -z da IMU",
+      "secao": "IMU parada",
+      "item": "inclinacao IMU"
+    },
+    {
+      "status": "OK",
+      "msg": "[8.6, -36.7, 7.3] LSB, desvio [18.3, 2.5, 7.0] LSB",
+      "secao": "IMU parada",
+      "item": "giro bias"
+    },
+    {
+      "status": "INFO",
+      "msg": "27.5 graus/min no rumo",
+      "secao": "IMU parada",
+      "item": "deriva sem correcao"
+    },
+    {
+      "status": "INFO",
+      "msg": "media [1627, -4827, 7907], |m| = 9407, ruido (desvio) [18.4, 20.3, 23.7] LSB",
+      "secao": "IMU parada",
+      "item": "mag"
+    },
+    {
+      "status": "INFO",
+      "msg": "mag ~10 Hz, acc ~240 Hz (leitura crua a 240 Hz)",
+      "secao": "IMU parada",
+      "item": "ODR medido"
+    },
+    {
+      "status": "INFO",
+      "msg": "87 picos em 803 leituras {'gyr_z': 30, 'gyr_x': 50, 'acc_y': 1, 'acc_x': 6}",
+      "secao": "Picos de 256 / BDU",
+      "item": "BDU desligado"
+    },
+    {
+      "status": "INFO",
+      "msg": "0 picos em 808 leituras {}",
+      "secao": "Picos de 256 / BDU",
+      "item": "BDU ligado"
+    },
+    {
+      "status": "OK",
+      "msg": "elimina os picos",
+      "secao": "Picos de 256 / BDU",
+      "item": "BDU"
+    },
+    {
+      "status": "OK",
+      "msg": "inclinacao medida 21.2 graus para a esquerda",
+      "secao": "Eixos da IMU",
+      "item": "lado esquerdo"
+    },
+    {
+      "status": "INFO",
+      "msg": "frente = -x IMU (0.99); esquerda = +y IMU (1.00); cima = -z IMU (0.99)",
+      "secao": "Eixos da IMU",
+      "item": "eixos"
+    },
+    {
+      "status": "INFO",
+      "msg": "15.7 graus",
+      "secao": "Eixos da IMU",
+      "item": "proa levantada"
+    },
+    {
+      "status": "OK",
+      "msg": "salvo em data/calib/axes.json",
+      "secao": "Eixos da IMU",
+      "item": "axes.json"
+    },
+    {
+      "status": "OK",
+      "msg": "x = 3623, y = 2900 (razao 0.80, ideal ~1)",
+      "secao": "Calibracao mag2d",
+      "item": "amplitudes"
+    },
+    {
+      "status": "INFO",
+      "msg": "centro (3370, -4402) LSB",
+      "secao": "Calibracao mag2d",
+      "item": "hard iron"
+    },
+    {
+      "status": "OK",
+      "msg": "-100.9 graus, sign = -1",
+      "secao": "Calibracao mag2d",
+      "item": "norte->leste"
+    },
+    {
+      "status": "OK",
+      "msg": "salvo em data/calib/mag2d.json",
+      "secao": "Calibracao mag2d",
+      "item": "mag2d.json"
+    },
+    {
+      "status": "AVS",
+      "msg": "biblioteca 101.2, celular 90.0, erro +11.2 graus",
+      "secao": "Validacao do rumo x celular",
+      "item": "rumo LESTE"
+    },
+    {
+      "status": "AVS",
+      "msg": "biblioteca 164.1, celular 180.0, erro -15.9 graus",
+      "secao": "Validacao do rumo x celular",
+      "item": "rumo SUL"
+    },
+    {
+      "status": "ERR",
+      "msg": "biblioteca 167.4, celular 270.0, erro -102.6 graus",
+      "secao": "Validacao do rumo x celular",
+      "item": "rumo OESTE"
+    },
+    {
+      "status": "OK",
+      "msg": "biblioteca 353.3, celular 0.0, erro -6.7 graus",
+      "secao": "Validacao do rumo x celular",
+      "item": "rumo NORTE"
+    },
+    {
+      "status": "INFO",
+      "msg": "-28.5 graus (vies), max |erro| 102.6",
+      "secao": "Validacao do rumo x celular",
+      "item": "erro medio"
+    }
+  ],
+  "interrompido": true
+}
