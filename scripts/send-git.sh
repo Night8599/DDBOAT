@@ -1,11 +1,12 @@
 #!/bin/bash
 # Envia a branch atual para o DDBOAT por git push (Linux/Ubuntu, Git Bash).
 # Le IP, usuario e pasta do config/boat04.json (ou do arquivo passado em $1).
-# Com sshpass instalado a senha e preenchida sozinha; sem ele, o ssh pede a senha.
+# Com sshpass e a variavel DDBOAT_PASSWORD definida, a senha e preenchida sozinha;
+# sem elas, o ssh pede a senha.
 
 cd "$(dirname "$0")/.." || exit 1
 CONFIG="${1:-config/boat04.json}"
-SENHA="ue32"
+SENHA="${DDBOAT_PASSWORD:-}"
 
 ler() { python3 -c "import json,sys; print(json.load(open('$CONFIG'))['boat']['$1'])" 2>/dev/null; }
 IP="$(ler ip)"; USUARIO="$(ler user)"; CAMINHO_REMOTO="$(ler remote_dir)"
@@ -23,10 +24,10 @@ fi
 echo "Enviando a branch '$BRANCH_ATUAL' para o DDBOAT ($USUARIO@$IP:$CAMINHO_REMOTO)..."
 git remote set-url ddboat "$USUARIO@$IP:$CAMINHO_REMOTO/" 2>/dev/null || git remote add ddboat "$USUARIO@$IP:$CAMINHO_REMOTO/"
 
-if command -v sshpass >/dev/null 2>&1; then
+if [ -n "$SENHA" ] && command -v sshpass >/dev/null 2>&1; then
     sshpass -p "$SENHA" git push ddboat "$BRANCH_ATUAL"
 else
-    echo "(sshpass nao encontrado: digite a senha $SENHA quando o ssh pedir)"
+    echo "(sem sshpass ou DDBOAT_PASSWORD: digite a senha quando o ssh pedir)"
     git push ddboat "$BRANCH_ATUAL"
 fi
 
