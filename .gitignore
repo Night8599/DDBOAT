@@ -220,3 +220,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# DDBoat run data: logs, captures and archives stay out of git
+# (curated trial logs live in results/logs/)
+*.zip
+capture_*.csv
+capture_*_console.txt
+.logs_barco/
+data_b4/
+*.save

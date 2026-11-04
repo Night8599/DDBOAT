@@ -1,5 +1,5 @@
 # Envia a branch atual para o DDBOAT por git push (Windows PowerShell).
-# Equivalente ao send-git.sh. O Windows nao tem sshpass: o ssh pede a senha (ue32).
+# Equivalente ao send-git.sh. O Windows nao tem sshpass: o ssh pede a senha.
 # Uso (na raiz do repositorio):  powershell -ExecutionPolicy Bypass -File scripts\send-git.ps1
 param([string]$Config = "config\boat04.json")
 
@@ -20,7 +20,7 @@ $remoto = "$USUARIO@${IP}:$CAMINHO_REMOTO/"
 git remote get-url ddboat 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { git remote set-url ddboat $remoto } else { git remote add ddboat $remoto }
 
-Write-Host "(digite a senha ue32 quando o ssh pedir)"
+Write-Host "(digite a senha quando o ssh pedir)"
 git push ddboat $BRANCH_ATUAL
 if ($LASTEXITCODE -eq 0) {
     Write-Host "OK: commits enviados para o barco."
